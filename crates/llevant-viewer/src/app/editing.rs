@@ -42,9 +42,12 @@ impl ViewerApp {
     pub(super) fn cut_cell(&mut self, keep: i64, cut: i64, simplify: bool, ctx: &egui::Context) {
         let what = format!("cell {keep} cut by #{cut}");
         let select = Query::Cells(vec![keep, cut]);
+        let said = what.clone();
         self.start_change(ctx, what, Some(select), move |source| {
             let plan = source.cut_plan(keep, cut, simplify)?;
-            Ok(input_edits::Change::one(keep, source.apply_cut(&plan)?))
+            let mut change = input_edits::Change::one(keep, source.apply_cut(&plan)?);
+            change.what = said;
+            Ok(change)
         });
     }
 

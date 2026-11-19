@@ -490,6 +490,15 @@ pub enum Command {
         cut: i64,
         simplify: bool,
     },
+    /// Preview in the inspector what [`Command::CutCell`] would write
+    /// (planned in the background); nothing is written.
+    PreviewCut {
+        keep: i64,
+        cut: i64,
+        simplify: bool,
+    },
+    /// Close the cut preview.
+    CancelCutPreview,
     /// Cells changed together (their material, density, parameters), as
     /// one edit taken back by one Undo; the cells then selected.
     EditCells(Vec<i64>, Vec<llevant_scene::source::CellChange>),

@@ -1261,3 +1261,188 @@ fn an_overlap_fixed_by_cutting_a_cell() {
     assert_eq!(h.state().input_edits(), (0, false));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An overlap cut previewed in the inspector (not in the Problems panel):
+/// planned in the background, nothing written until Apply; Cancel, a cut that
+/// cannot be made, a stale preview and Apply, and the buttons of the Problems
+/// panel that open and close it.
+#[test]
+fn a_cut_is_previewed_in_the_inspector() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let dir = std::env::temp_dir().join(format!("llevant-viewer-cutview-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("overlap.i");
+    let text = "overlap\n1 0 -1 imp:n=1\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\
+                4 0 1 -5 imp:n=0\n5 0 5 imp:n=0\n\n\
+                1 so 5\n2 sx 4 5\n3 px 0\n4 so 9\n5 so 50\n\n";
+    std::fs::write(&path, text).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1300.0))
+        .wgpu_setup(llevant_viewer::app::wgpu_options().wgpu_setup)
+        .build_eframe(|cc| ViewerApp::empty(cc).unwrap());
+    let ctx = h.ctx.clone();
+    h.state_mut().open_file(path.clone(), &ctx);
+    step_until(&mut h, "the model and its cards", |a| {
+        a.document()
+            .is_some_and(|d| d.model.is_complete() && d.source.is_some())
+            && !a.is_loading()
+    });
+    let card = |h: &Harness<'_, ViewerApp>, id: i64| {
+        let d = h.state().document().unwrap();
+        d.source.as_ref().unwrap().cell(id).unwrap().text.clone()
+    };
+    let preview = |h: &mut Harness<'_, ViewerApp>, keep: i64, cut: i64| {
+        let ctx = h.ctx.clone();
+        h.state_mut().send(
+            Command::PreviewCut {
+                keep,
+                cut,
+                simplify: true,
+            },
+            &ctx,
+        );
+        step_until(h, "the plan", |a| {
+            a.document()
+                .and_then(|d| d.cut_preview.as_ref())
+                .is_some_and(|p| p.with_plan(|p| p.is_some()))
+        });
+        h.run_steps(3);
+    };
+    let open = |h: &Harness<'_, ViewerApp>| h.state().document().unwrap().cut_preview.is_some();
+    let before = card(&h, 2);
+
+    // Previewed: shown in the inspector, nothing written.
+    preview(&mut h, 2, 3);
+    h.get_by_label_contains("Cut #3 from cell 2");
+    assert!(h
+        .query_by_label("Apply")
+        .is_some_and(|a| !a.accesskit_node().is_disabled()));
+    assert_eq!(h.state().input_edits(), (0, false));
+    assert_eq!(card(&h, 2), before);
+    if let Some(png) = std::env::var_os("LLEVANT_VIEWER_TEST_PNG") {
+        save(&mut h, &PathBuf::from(png).with_extension("cutview.png"));
+    }
+
+    // Cancel closes it.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(!open(&h));
+    assert!(h.query_by_label_contains("Cut #3 from cell 2").is_none());
+
+    // A cut that leaves nothing: said, and Apply waits.
+    preview(&mut h, 3, 1);
+    h.get_by_label_contains("lies inside cell 1");
+    assert!(h
+        .query_by_label("Apply")
+        .is_none_or(|a| a.accesskit_node().is_disabled()));
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+
+    // A preview of an input since changed is no longer shown.
+    preview(&mut h, 2, 3);
+    let ctx = h.ctx.clone();
+    let text4 = card(&h, 4);
+    h.state_mut().send(
+        Command::EditCard(
+            llevant_scene::source::CardKind::Cell,
+            4,
+            format!("{} $ edited", text4.trim_end()),
+        ),
+        &ctx,
+    );
+    step_until(&mut h, "the edit", |a| {
+        a.input_edits() == (1, true) && !a.is_loading()
+    });
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Cut #3 from cell 2").is_none());
+    h.state_mut().send(Command::UndoInputEdit, &ctx);
+    step_until(&mut h, "the undo", |a| {
+        a.input_edits() == (0, false) && !a.is_loading()
+    });
+    assert!(!open(&h) || h.query_by_label_contains("Cut #3 from cell 2").is_none());
+
+    // Apply writes it (one Undo), and closes the preview.
+    preview(&mut h, 2, 3);
+    h.get_by_label("Apply").click();
+    step_until(&mut h, "the cut", |a| {
+        a.input_edits() == (1, true) && !a.is_loading()
+    });
+    h.run_steps(3);
+    assert!(card(&h, 2).contains("#3"), "{}", card(&h, 2));
+    assert_eq!(h.state().input_edits(), (1, true));
+    assert!(!open(&h));
+    h.state_mut().send(Command::UndoInputEdit, &ctx);
+    step_until(&mut h, "the undo", |a| {
+        a.input_edits() == (0, false) && !a.is_loading()
+    });
+    assert_eq!(card(&h, 2), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The cut buttons of an overlap in the Problems panel open the preview in
+/// the inspector, and a second click closes it.
+#[test]
+fn the_cut_buttons_open_and_close_the_preview() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let dir = std::env::temp_dir().join(format!("llevant-viewer-cutbtn-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("overlap.i");
+    let text = "overlap\n1 0 -1 imp:n=1\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\
+                4 0 1 -5 imp:n=0\n5 0 5 imp:n=0\n\n\
+                1 so 5\n2 sx 4 5\n3 px 0\n4 so 9\n5 so 50\n\n";
+    std::fs::write(&path, text).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1300.0))
+        .wgpu_setup(llevant_viewer::app::wgpu_options().wgpu_setup)
+        .build_eframe(|cc| ViewerApp::empty(cc).unwrap());
+    let ctx = h.ctx.clone();
+    h.state_mut().open_file(path.clone(), &ctx);
+    step_until(&mut h, "the model and its cards", |a| {
+        a.document()
+            .is_some_and(|d| d.model.is_complete() && d.source.is_some())
+            && !a.is_loading()
+    });
+    panel(&mut h, Panel::Problems);
+    h.run_steps(2);
+    h.get_all_by_label("the problem").next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Check").click();
+    step_until(&mut h, "the check", |a| {
+        a.document().unwrap().results.check.is_some()
+    });
+    h.run_steps(3);
+    let open = |h: &Harness<'_, ViewerApp>| h.state().document().unwrap().cut_preview.is_some();
+    assert!(!open(&h));
+    h.get_all_by_label_contains(icons::CLIP)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.contains(" from "))
+        })
+        .expect("a cut button")
+        .click();
+    step_until(&mut h, "the preview", |a| {
+        a.document().is_some_and(|d| d.cut_preview.is_some())
+    });
+    h.run_steps(3);
+    h.get_by_label_contains("Cut #");
+    h.get_all_by_label_contains(icons::CLIP)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.contains(" from ") && !l.contains("Cut"))
+        })
+        .expect("the button again")
+        .click();
+    h.run_steps(3);
+    assert!(!open(&h), "a second click closes it");
+    let _ = std::fs::remove_dir_all(&dir);
+}

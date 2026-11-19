@@ -103,7 +103,29 @@ impl ViewerApp {
                     keep,
                     cut,
                     simplify,
-                } => self.cut_cell(keep, cut, simplify, ctx),
+                } => {
+                    if let Some(d) = &mut self.doc {
+                        d.cut_preview = None;
+                    }
+                    self.cut_cell(keep, cut, simplify, ctx)
+                }
+                Command::PreviewCut {
+                    keep,
+                    cut,
+                    simplify,
+                } => {
+                    if let Some(d) = &mut self.doc {
+                        d.cut_preview = d.source.as_ref().map(|s| {
+                            crate::cutpreview::CutPreview::start(ctx, s, keep, cut, simplify)
+                        });
+                        self.frame.show(frame::Panel::Inspector);
+                    }
+                }
+                Command::CancelCutPreview => {
+                    if let Some(d) = &mut self.doc {
+                        d.cut_preview = None;
+                    }
+                }
                 Command::EditCells(ids, changes) => self.edit_cells(ids, changes, ctx),
                 Command::Renumber(kind, pairs) => self.renumber(kind, pairs, ctx),
                 Command::AddCard {

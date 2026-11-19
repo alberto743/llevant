@@ -139,6 +139,8 @@ pub struct Document {
     pub focus: Option<Picked>,
     /// The surface picked with Alt+click, marked in both views.
     pub surface_pick: Option<SurfacePick>,
+    /// The overlap cut previewed in the inspector (and not applied).
+    pub cut_preview: Option<crate::cutpreview::CutPreview>,
     /// What the pointer is over.
     pub pointer: Pointer,
     /// What the tools are editing.
@@ -640,6 +642,7 @@ impl Document {
             history: History::default(),
             focus: None,
             surface_pick: None,
+            cut_preview: None,
             pointer: Pointer {
                 hover: None,
                 hover_key: None,
@@ -1213,6 +1216,8 @@ impl Document {
             | Command::Reload
             | Command::EditCard(..)
             | Command::CutCell { .. }
+            | Command::PreviewCut { .. }
+            | Command::CancelCutPreview
             | Command::EditCells(..)
             | Command::Renumber(..)
             | Command::EditSelection

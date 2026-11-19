@@ -199,5 +199,9 @@ mod tests {
         let (r, a) = changed_words("1 so 5", "1  so\n     5");
         assert!(r.is_empty() && a.is_empty(), "spacing only");
         assert_eq!(pieces("a  b\nc").concat(), "a  b\nc");
+        // A cell cut: nothing removed, the `#3` added.
+        let (r, a) = changed_words("2 0 (-2:-4) 3 imp:n=1\n", "2 0 (-2:-4) 3 #3 imp:n=1\n");
+        assert!(r.is_empty(), "{r:?}");
+        assert_eq!(a, ["#3"]);
     }
 }
