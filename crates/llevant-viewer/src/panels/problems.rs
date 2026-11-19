@@ -9,7 +9,7 @@
 use llevant::{Label, Status, Subject};
 use llevant_scene::query::Query;
 use llevant_scene::source::{CutPlan, Source};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::command::Command;
 use crate::context::{cell_link, link};
@@ -25,37 +25,54 @@ pub struct ProblemsPanel {
     /// Cut cells out of each other as `A #B`, without shortening the
     /// geometry by Boolean algebra.
     pub plain_cuts: bool,
-    /// The last cut previewed: egui draws a tooltip every frame, and a plan
-    /// can take long (the Boolean algebra of large cells).
-    previews: PreviewCache,
+    /// The cut being previewed (opened by clicking its button).
+    preview: Option<Preview>,
 }
 
-/// A cut plan by what it was made from: the input (its `Source` and
-/// revision), the two cells and `simplify`.
-#[derive(Default)]
-struct PreviewCache(Option<(PreviewKey, Result<CutPlan, String>)>);
+type Plan = Result<CutPlan, String>;
 
-type PreviewKey = (usize, u64, i64, i64, bool);
+/// A cut plan made in the background (it can take long: the Boolean algebra
+/// of large cells), by what it was made from: the input (its `Source` and
+/// revision), the two cells and `simplify`. Dropped when the input changes.
+struct Preview {
+    key: (usize, u64, i64, i64, bool),
+    plan: Arc<Mutex<Option<Plan>>>,
+}
 
-impl PreviewCache {
-    fn plan(
-        &mut self,
+impl Preview {
+    fn key(
         source: &Arc<Source>,
         keep: i64,
         cut: i64,
         simplify: bool,
-    ) -> &Result<CutPlan, String> {
-        let key = (
+    ) -> (usize, u64, i64, i64, bool) {
+        (
             Arc::as_ptr(source) as usize,
             source.revision(),
             keep,
             cut,
             simplify,
-        );
-        if self.0.as_ref().is_none_or(|(k, _)| *k != key) {
-            self.0 = Some((key, source.cut_plan(keep, cut, simplify)));
+        )
+    }
+
+    fn start(
+        ctx: &egui::Context,
+        source: &Arc<Source>,
+        keep: i64,
+        cut: i64,
+        simplify: bool,
+    ) -> Self {
+        let plan = Arc::new(Mutex::new(None));
+        let (src, slot, ctx) = (source.clone(), plan.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let p = src.cut_plan(keep, cut, simplify);
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
+            ctx.request_repaint();
+        });
+        Self {
+            key: Self::key(source, keep, cut, simplify),
+            plan,
         }
-        &self.0.as_ref().expect("just set").1
     }
 }
 
@@ -106,7 +123,7 @@ fn problem_row(
     l: &Label,
     volume: Option<(String, String)>,
     simplify: bool,
-    previews: &mut PreviewCache,
+    preview: &mut Option<Preview>,
     out: &mut Vec<Command>,
 ) -> bool {
     let m = &doc.model;
@@ -167,48 +184,89 @@ fn problem_row(
             // An overlap of two cells: either can be cut out of the other.
             if l.status == Status::Overlap && l.involved.len() == 2 {
                 let (a, b) = (m.cell_id(l.involved[0]), m.cell_id(l.involved[1]));
+                let source = doc.source.as_ref();
+                // A preview of an input since changed is dropped.
+                if let (Some(p), Some(src)) = (preview.as_ref(), source) {
+                    if p.key.0 != Arc::as_ptr(src) as usize || p.key.1 != src.revision() {
+                        *preview = None;
+                    }
+                }
                 ui.horizontal_wrapped(|ui| {
                     for (keep, cut) in [(a, b), (b, a)] {
+                        let open = preview.as_ref().is_some_and(|p| {
+                            p.key.2 == keep && p.key.3 == cut && p.key.4 == simplify
+                        });
                         let r = ui
-                            .small_button(format!("{} #{cut} from {keep}", icons::CLIP))
-                            .on_hover_ui(|ui| cut_preview(ui, doc, previews, keep, cut, simplify));
+                            .selectable_label(open, format!("{} #{cut} from {keep}", icons::CLIP))
+                            .on_hover_text("Click to preview the cut");
                         if r.clicked() {
-                            out.push(Command::CutCell {
-                                keep,
-                                cut,
-                                simplify,
-                            });
+                            *preview = match (open, source) {
+                                (false, Some(src)) => {
+                                    Some(Preview::start(ui.ctx(), src, keep, cut, simplify))
+                                }
+                                _ => None,
+                            };
                         }
                     }
                 });
+                // The open preview, if it is of this overlap, with Apply.
+                let mut close = false;
+                if let Some(p) = preview.as_ref() {
+                    let this = [(a, b), (b, a)].contains(&(p.key.2, p.key.3));
+                    if this && p.key.4 == simplify {
+                        let (keep, cut) = (p.key.2, p.key.3);
+                        let guard = p.plan.lock().unwrap_or_else(|e| e.into_inner());
+                        let can_apply = cut_preview(ui, guard.as_ref(), keep, cut);
+                        drop(guard);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(can_apply, egui::Button::new("Apply"))
+                                .clicked()
+                            {
+                                out.push(Command::CutCell {
+                                    keep,
+                                    cut,
+                                    simplify,
+                                });
+                                close = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                }
+                if close {
+                    *preview = None;
+                }
             }
         });
     go
 }
 
 /// What cutting `cut` out of `keep` would write: the card before and after.
-fn cut_preview(
-    ui: &mut egui::Ui,
-    doc: &Document,
-    previews: &mut PreviewCache,
-    keep: i64,
-    cut: i64,
-    simplify: bool,
-) {
-    let Some(source) = &doc.source else {
-        ui.label("the input is not loaded");
-        return;
-    };
-    match previews.plan(source, keep, cut, simplify) {
-        Err(why) => {
-            ui.label(why.as_str());
+///
+/// True when the cut can be applied (the plan is made and not empty).
+fn cut_preview(ui: &mut egui::Ui, plan: Option<&Plan>, keep: i64, cut: i64) -> bool {
+    match plan {
+        None => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Planning the cut…");
+            });
+            false
         }
-        Ok(p) if p.result.empty => {
+        Some(Err(why)) => {
+            ui.label(why.as_str());
+            false
+        }
+        Some(Ok(p)) if p.result.empty => {
             ui.label(format!(
                 "Cell {keep} lies inside cell {cut}: cutting would leave nothing"
             ));
+            false
         }
-        Ok(p) => {
+        Some(Ok(p)) => {
             ui.label(format!("Cell {keep}, with cell {cut} cut out of it:"));
             ui.label(theme::data(format!("- {}", p.old_card.trim_end())));
             ui.label(theme::data(format!("+ {}", p.new_card.trim_end())));
@@ -228,6 +286,7 @@ fn cut_preview(
             for w in &p.result.warnings {
                 ui.label(egui::RichText::new(w).weak());
             }
+            true
         }
     }
 }
@@ -291,7 +350,7 @@ impl ProblemsPanel {
                     l,
                     Some((volume, sigma)),
                     !self.plain_cuts,
-                    &mut self.previews,
+                    &mut self.preview,
                     out,
                 ) {
                     out.extend(go(doc, l, Some(vol.bbox), vol.bbox.center()));
@@ -320,7 +379,7 @@ impl ProblemsPanel {
                     l,
                     None,
                     !self.plain_cuts,
-                    &mut self.previews,
+                    &mut self.preview,
                     out,
                 ) {
                     out.extend(go(doc, l, None, *p));
