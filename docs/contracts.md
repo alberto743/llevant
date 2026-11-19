@@ -62,10 +62,12 @@ Boolean algebra on the surface senses as independent variables (a macrobody face
 variable of its own), so it is the same region for any surfaces. Every call proves it:
 `#n` is expanded by De Morgan, and reduced ordered BDDs of the unsimplified `A ∩ ¬B` and
 of the result must be the same node, else the call is an error and nothing is written
-(`source/algebra.rs` tests, among them 400 random cuts compared with truth tables, and a
-wrong form that the proof rejects). A `keep` with a `TRCL`, a `LIKE` cell and cells in
-different universes are refused; a `cut` with a `TRCL` is written as `#n` and not
-expanded. `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
+(`source/algebra.rs` tests, among them 400 random cuts compared with truth tables, and
+the BDDs telling a wrong form from a right one). A `keep` with a `TRCL`, a `LIKE` cell, a
+`keep` that a `LIKE` cell copies and cells in different universes are refused; a `cut`
+with a `TRCL` is written as `#n` and not expanded; the cells that write `#keep` are named
+in the warnings. `apply_cut` refuses a plan made when `keep`'s card was not as it is now
+(`source/cut.rs` tests). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
 keeps its cell, and the simplified and plain cuts label every point alike.
 

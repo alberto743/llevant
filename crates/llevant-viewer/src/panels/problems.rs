@@ -8,6 +8,8 @@
 
 use llevant::{Label, Status, Subject};
 use llevant_scene::query::Query;
+use llevant_scene::source::{CutPlan, Source};
+use std::sync::Arc;
 
 use crate::command::Command;
 use crate::context::{cell_link, link};
@@ -23,6 +25,38 @@ pub struct ProblemsPanel {
     /// Cut cells out of each other as `A #B`, without shortening the
     /// geometry by Boolean algebra.
     pub plain_cuts: bool,
+    /// The last cut previewed: egui draws a tooltip every frame, and a plan
+    /// can take long (the Boolean algebra of large cells).
+    previews: PreviewCache,
+}
+
+/// A cut plan by what it was made from: the input (its `Source` and
+/// revision), the two cells and `simplify`.
+#[derive(Default)]
+struct PreviewCache(Option<(PreviewKey, Result<CutPlan, String>)>);
+
+type PreviewKey = (usize, u64, i64, i64, bool);
+
+impl PreviewCache {
+    fn plan(
+        &mut self,
+        source: &Arc<Source>,
+        keep: i64,
+        cut: i64,
+        simplify: bool,
+    ) -> &Result<CutPlan, String> {
+        let key = (
+            Arc::as_ptr(source) as usize,
+            source.revision(),
+            keep,
+            cut,
+            simplify,
+        );
+        if self.0.as_ref().is_none_or(|(k, _)| *k != key) {
+            self.0 = Some((key, source.cut_plan(keep, cut, simplify)));
+        }
+        &self.0.as_ref().expect("just set").1
+    }
 }
 
 /// Go to a problem: frame `b` (or a box around `p`), slice through `p`,
@@ -64,6 +98,7 @@ const CELLS_SHOWN: usize = 6;
 /// button, the status and (right-aligned) the volume; under them, its
 /// cells as links, wrapping, the first [`CELLS_SHOWN`]. Odd rows are on a
 /// faint background. True when "go" was clicked.
+#[allow(clippy::too_many_arguments)]
 fn problem_row(
     ui: &mut egui::Ui,
     doc: &Document,
@@ -71,6 +106,7 @@ fn problem_row(
     l: &Label,
     volume: Option<(String, String)>,
     simplify: bool,
+    previews: &mut PreviewCache,
     out: &mut Vec<Command>,
 ) -> bool {
     let m = &doc.model;
@@ -135,7 +171,7 @@ fn problem_row(
                     for (keep, cut) in [(a, b), (b, a)] {
                         let r = ui
                             .small_button(format!("{} #{cut} from {keep}", icons::CLIP))
-                            .on_hover_ui(|ui| cut_preview(ui, doc, keep, cut, simplify));
+                            .on_hover_ui(|ui| cut_preview(ui, doc, previews, keep, cut, simplify));
                         if r.clicked() {
                             out.push(Command::CutCell {
                                 keep,
@@ -151,14 +187,21 @@ fn problem_row(
 }
 
 /// What cutting `cut` out of `keep` would write: the card before and after.
-fn cut_preview(ui: &mut egui::Ui, doc: &Document, keep: i64, cut: i64, simplify: bool) {
+fn cut_preview(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    previews: &mut PreviewCache,
+    keep: i64,
+    cut: i64,
+    simplify: bool,
+) {
     let Some(source) = &doc.source else {
         ui.label("the input is not loaded");
         return;
     };
-    match source.cut_plan(keep, cut, simplify) {
+    match previews.plan(source, keep, cut, simplify) {
         Err(why) => {
-            ui.label(why);
+            ui.label(why.as_str());
         }
         Ok(p) if p.result.empty => {
             ui.label(format!(
@@ -241,7 +284,16 @@ impl ProblemsPanel {
                 let (l, vol) = (&v.labels[i], &v.volumes[i]);
                 let volume = format!("{:.2e} cm³", vol.estimate);
                 let sigma = format!("± {:.1e} cm³ (one standard deviation)", vol.sigma);
-                if problem_row(ui, doc, k, l, Some((volume, sigma)), !self.plain_cuts, out) {
+                if problem_row(
+                    ui,
+                    doc,
+                    k,
+                    l,
+                    Some((volume, sigma)),
+                    !self.plain_cuts,
+                    &mut self.previews,
+                    out,
+                ) {
                     out.extend(go(doc, l, Some(vol.bbox), vol.bbox.center()));
                 }
             }
@@ -261,7 +313,16 @@ impl ProblemsPanel {
                 return;
             }
             for (k, (l, p)) in seen.iter().enumerate() {
-                if problem_row(ui, doc, k, l, None, !self.plain_cuts, out) {
+                if problem_row(
+                    ui,
+                    doc,
+                    k,
+                    l,
+                    None,
+                    !self.plain_cuts,
+                    &mut self.previews,
+                    out,
+                ) {
                     out.extend(go(doc, l, None, *p));
                 }
             }

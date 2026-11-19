@@ -6,7 +6,7 @@
 
 use super::algebra::{self, Cut};
 use super::fields::CellChange;
-use super::{CardKind, Edited, Source};
+use super::{geometry_words, CardKind, Edited, Source, Word};
 
 /// What cutting cell `cut` out of cell `keep` would do, before anything is
 /// written.
@@ -34,10 +34,12 @@ impl Source {
     /// does.
     ///
     /// An error for a cell the input has not got, cells in different
-    /// universes, a `LIKE` cell and a `keep` with a `TRCL` (MCNP moves the
-    /// surfaces of a `#n` by the cell's own `TRCL`). A `cut` with a `TRCL`, or
-    /// `#n` of a cell that cannot be expanded, is written as `#n` and not
-    /// simplified.
+    /// universes (`u=` on their cards), a `LIKE` cell, a `keep` with a `TRCL`
+    /// (MCNP moves the surfaces of a `#n` by the cell's own `TRCL`) and a
+    /// `keep` that a `LIKE` cell copies (that cell would be cut too). A `cut`
+    /// with a `TRCL`, or `#n` of a cell that cannot be expanded, is written
+    /// as `#n` and not simplified. A warning for each cell that writes
+    /// `#keep`: it then takes in what is cut.
     pub fn cut_plan(&self, keep: i64, cut: i64, simplify: bool) -> Result<CutPlan, String> {
         if keep == cut {
             return Err(format!("cell {keep} cannot be cut out of itself"));
@@ -74,13 +76,32 @@ impl Source {
             .card(CardKind::Cell, keep)
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
             .text;
-        let (mut result, none) = {
+        let (mut result, already, users) = {
             let tree = self.tree();
             let a = tree
                 .cell(keep)
                 .ok_or_else(|| format!("no cell {keep} in the input"))?
                 .geometry_expr()
                 .map_err(|e| format!("cell {keep}: {}", e.message))?;
+            // The cells that copy `keep` or complement it change with it.
+            let mut users = Vec::new();
+            for c in tree.cells() {
+                let Some(n) = c.id() else { continue };
+                if n == keep {
+                    continue;
+                }
+                if c.like() == Some(keep) {
+                    return Err(format!(
+                        "cell {n} is LIKE {keep} BUT: it would be cut too; cut it by hand"
+                    ));
+                }
+                let complements = geometry_words(&c.geometry_text())
+                    .iter()
+                    .any(|w| matches!(w.kind, Word::Cell(m) if m == keep));
+                if complements && !users.contains(&n) {
+                    users.push(n);
+                }
+            }
             // A cell `#n` can be expanded through: its own geometry, no
             // `TRCL`, not a `LIKE`.
             let cells = |n: i64| {
@@ -94,27 +115,35 @@ impl Source {
                 }
                 c.geometry_expr().ok()
             };
-            if simplify {
-                (algebra::cut_expr(&a, cut, &cells)?, false)
+            let mut r = if simplify {
+                algebra::cut_expr(&a, cut, &cells)?
             } else {
                 let mut r = algebra::cut_expr(&a, cut, &|_| None)?;
+                // Its "cannot be expanded" is the point of a plain cut.
                 r.warnings.clear();
-                (r, true)
+                r.trace.clear();
+                r
+            };
+            // `A` has `#B` already: nothing to write (not even a shorter `A`).
+            let already = r.plain == a.to_string();
+            if already {
+                r.geometry = r.plain.clone();
+                r.terms_after = r.terms_before;
+                r.simplified = false;
+                r.warnings = vec![format!("cell {keep} is cut by #{cut} already")];
             }
+            (r, already, users)
         };
-        if none {
-            result.trace.clear();
+        for n in users {
+            result.warnings.push(format!(
+                "cell {n} writes #{keep}: it will take in what cell {cut} has of cell {keep}"
+            ));
         }
-        let new_card = if result.empty {
+        let new_card = if result.empty || already {
             old_card.clone()
         } else {
             self.cell_with(keep, &[CellChange::Geometry(result.geometry.clone())])?
         };
-        if !result.empty && new_card == old_card {
-            result
-                .warnings
-                .push(format!("cell {keep} is cut by #{cut} already"));
-        }
         Ok(CutPlan {
             keep,
             cut,
@@ -126,12 +155,20 @@ impl Source {
 
     /// Writes a plan: the card of `plan.keep` replaced (undone with
     /// [`Source::restore`]). An error for a plan with nothing to write (the
-    /// cell is inside the one cut out of it).
+    /// cell is inside the one cut out of it), and for one made when the card
+    /// was not as it is now (plan again).
     pub fn apply_cut(&self, plan: &CutPlan) -> Result<Edited, String> {
         if plan.result.empty {
             return Err(format!(
                 "cell {} lies inside cell {}: cutting would leave nothing",
                 plan.keep, plan.cut
+            ));
+        }
+        let now = self.card(CardKind::Cell, plan.keep).map(|c| c.text);
+        if now.as_deref() != Some(plan.old_card.as_str()) {
+            return Err(format!(
+                "cell {} has changed since the cut was planned: plan it again",
+                plan.keep
             ));
         }
         self.edit(CardKind::Cell, plan.keep, &plan.new_card)
@@ -147,7 +184,7 @@ mod tests {
 2 0 -1 3 imp:n=1
 3 0 -1 3 imp:n=1 u=4
 4 0 -1 imp:n=1 trcl=(1 0 0)
-5 like 1 but imp:n=2
+5 like 4 but imp:n=2
 
 1 so 5
 2 so 9
@@ -217,13 +254,81 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_is_checked_against_the_geometry() {
-        // Cell 1 is -1 3 with a bit of cell 2 (-2 3) inside: 1 outside -2 is -1 3 2.
+    fn nested_spheres_are_not_known_to_the_algebra() {
+        // Sphere 1 is inside sphere 2, so cell 1 (-1 3) lies inside cell 2
+        // (-2 3) and nothing of it is left. The algebra does not know where
+        // surfaces are: -1 3 (2 : -3) is -1 3 2, as long as the plain cut,
+        // which is kept.
         let s =
             Source::from_str("t\n1 0 -1 3 imp:n=1\n2 0 -2 3 imp:n=1\n\n1 so 5\n2 so 9\n3 px 0\n\n");
         let p = s.cut_plan(1, 2, true).unwrap();
-        // -2 contains -1 in reality, but the algebra does not know: the cut
-        // stays as the algebra gives it, two terms and a complement.
+        assert!(!p.result.empty);
+        assert!(!p.result.simplified);
         assert_eq!(p.result.geometry, "-1 3 #2");
+    }
+
+    #[test]
+    fn a_tie_keeps_the_plain_cut() {
+        // (-2:-4) 3 outside -1 3 is 3 1 (-2:-4): four terms, as the plain cut
+        // (the viewer's test makes this cut too, when it has a GPU).
+        let s = Source::from_str(
+            "t\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\n1 so 5\n2 sx 4 5\n3 px 0\n4 so 9\n\n",
+        );
+        let p = s.cut_plan(2, 3, true).unwrap();
+        assert!(!p.result.simplified);
+        assert_eq!(p.new_card.trim_end(), "2 0 (-2:-4) 3 #3 imp:n=1");
+    }
+
+    #[test]
+    fn a_stale_plan_is_refused() {
+        let s = Source::from_str(INPUT);
+        let first = s.cut_plan(1, 2, false).unwrap();
+        let second = s.cut_plan(1, 4, false).unwrap();
+        s.apply_cut(&first).unwrap();
+        let err = s.apply_cut(&second).unwrap_err();
+        assert!(err.contains("changed since"), "{err}");
+        assert!(s.to_source().contains("#2"), "the first cut is kept");
+    }
+
+    #[test]
+    fn a_cell_copied_by_like_is_refused() {
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 imp:n=1\n3 like 1 but imp:n=2\n\n1 so 5\n2 sx 4 5\n\n",
+        );
+        let err = s.cut_plan(1, 2, true).unwrap_err();
+        assert!(err.contains("cell 3 is LIKE 1"), "{err}");
+        assert!(s.cut_plan(2, 1, true).is_ok());
+    }
+
+    #[test]
+    fn cells_complementing_the_cut_one_are_named() {
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 imp:n=1\n3 0 #1 #2 -3 imp:n=1\n4 0 3 imp:n=0\n\n\
+             1 so 5\n2 sx 4 5\n3 so 50\n\n",
+        );
+        let p = s.cut_plan(1, 2, true).unwrap();
+        assert!(
+            p.result
+                .warnings
+                .iter()
+                .any(|w| w.contains("cell 3 writes #1")),
+            "{:?}",
+            p.result.warnings
+        );
+    }
+
+    #[test]
+    fn a_cell_cut_already_is_left_as_it_is() {
+        let s = Source::from_str("t\n1 0 -1 #2 imp:n=1\n2 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n\n");
+        for simplify in [false, true] {
+            let p = s.cut_plan(1, 2, simplify).unwrap();
+            assert_eq!(p.new_card, p.old_card);
+            assert!(!p.result.simplified);
+            assert!(
+                p.result.warnings[0].contains("already"),
+                "{:?}",
+                p.result.warnings
+            );
+        }
     }
 }

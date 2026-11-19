@@ -592,11 +592,14 @@ class Deck:
         the result put in fewer terms by Boolean algebra alone, proven equal to
         `keep` outside `cut` for any surfaces. Nothing is written.
         `ValueError` for a cell not in the input, cells in different
-        universes, a `LIKE` cell and a `keep` with a `TRCL`.
+        universes, a `LIKE` cell, a `keep` with a `TRCL` and a `keep` that a
+        `LIKE` cell copies. `Cut.warnings` names the cells that write `#keep`
+        (they take in what is cut).
         """
     def apply(self, cut: Cut) -> None:
         """Write a cut into the deck. `ValueError` if it has nothing to write
-        (`keep` lies inside `cut`).
+        (`keep` lies inside `cut`) or if cell `keep` has changed since the cut
+        was planned (plan it again).
         """
     def undo(self) -> bool:
         """Undo the last cut applied; false if there is none."""

@@ -12,7 +12,8 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::{RwLock, RwLockReadGuard};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use llevant::{Error, Result};
 
@@ -103,6 +104,8 @@ pub struct Source {
     tree: RwLock<migjorn::Model>,
     /// The line of each card (by slot), as of the last edit.
     lines: RwLock<CardLines>,
+    /// Counts the times the tree was taken to be written ([`Source::revision`]).
+    revision: AtomicU64,
 }
 
 /// The line of every card, by slot: what [`migjorn::Model::line_of`] gives,
@@ -165,6 +168,7 @@ impl Source {
         Source {
             tree: RwLock::new(tree),
             lines: RwLock::new(lines),
+            revision: AtomicU64::new(0),
         }
     }
 
@@ -172,6 +176,20 @@ impl Source {
     /// edits waiting while it is held.
     pub fn tree(&self) -> RwLockReadGuard<'_, migjorn::Model> {
         self.tree.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The tree to write, the revision counted.
+    fn tree_mut(&self) -> RwLockWriteGuard<'_, migjorn::Model> {
+        let tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        tree
+    }
+
+    /// A number that changes whenever the input may have: equal revisions,
+    /// the same text (what a frontend caches something computed from the
+    /// cards by).
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Relaxed)
     }
 
     pub fn cell(&self, id: i64) -> Option<Card> {
@@ -252,7 +270,7 @@ impl Source {
                 line.chars().count()
             ));
         }
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         let (slot, old) = find(&tree, kind, id)
             .ok_or_else(|| format!("{what} is not in the input (in a READ file?)"))?;
         let mut text = text.to_string();
@@ -305,7 +323,7 @@ impl Source {
 
     /// Take an edit back: its card written as it was.
     pub fn restore(&self, e: &Edited) -> std::result::Result<(), String> {
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         set_text(&mut tree, e.kind, e.slot, &e.old)
             .map_err(|err| format!("{} (slot {}): {err}", e.kind.name(), e.slot))?;
         drop(tree);
@@ -315,7 +333,7 @@ impl Source {
 
     /// Make an edit taken back again: its card written as it was after it.
     pub fn redo(&self, e: &Edited) -> std::result::Result<(), String> {
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         set_text(&mut tree, e.kind, e.slot, &e.new)
             .map_err(|err| format!("{} (slot {}): {err}", e.kind.name(), e.slot))?;
         drop(tree);

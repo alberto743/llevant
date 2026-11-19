@@ -1236,11 +1236,9 @@ fn an_overlap_fixed_by_cutting_a_cell() {
     );
     assert!(msg.contains("cell 2 cut by #3"), "{msg}");
     assert_eq!(h.state().input_edits(), (1, true));
-    assert!(
-        card(&h, 2).contains("#3") || card(&h, 2) != before,
-        "{}",
-        card(&h, 2)
-    );
+    // (-2:-4) 3 outside -1 3 is 3 1 (-2:-4): no shorter than the plain cut,
+    // which is kept.
+    assert_eq!(card(&h, 2).trim_end(), "2 0 (-2:-4) 3 #3 imp:n=1");
     assert_eq!(
         card(&h, 3).trim_end(),
         "3 0 -1 3 imp:n=1",

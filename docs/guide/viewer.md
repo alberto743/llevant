@@ -142,8 +142,10 @@ default the geometry written is shortened with the laws of Boolean algebra alone
 (De Morgan, distributivity, `x·¬x = 0`, absorption, consensus), which is proven equal
 to the plain `A #B` whatever the surfaces are; tick **Plain cuts** to write `A #B`
 as it is. The edit is one Undo and is not saved until you save the input. A cell with
-a `TRCL`, a `LIKE` cell and cells in different universes are refused, and cutting a
-cell out of one that lies inside it is refused (nothing would be left).
+a `TRCL`, a `LIKE` cell, a cell that a `LIKE` cell copies and cells in different
+universes are refused, and cutting a cell out of one that lies inside it is refused
+(nothing would be left). The tooltip names the cells that write `#A`: they then take in
+the part of B that is cut out of A, which may make a new overlap.
 
 ![The Check workspace: two overlaps found in the slice, hatched in magenta](../img/viewer-check.png)
 

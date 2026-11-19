@@ -85,7 +85,7 @@ impl Source {
             edits.iter().collect()
         };
         let text = |e: &Edited, undo: bool| if back != undo { &e.old } else { &e.new }.clone();
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         // A card added: taken out (found by its number), or added again.
         let write = |tree: &mut migjorn::Model, e: &Edited, undo: bool| -> Result<(), String> {
             match e.added {
@@ -167,7 +167,7 @@ impl Source {
         if kind == IdKind::Universe && map.contains_key(&0) {
             return Err("universe 0 is the real world: it keeps its number".into());
         }
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         if let Some(ck) = card_kind {
             let mut olds: Vec<i64> = map.keys().copied().collect();
             olds.sort_unstable();
@@ -253,7 +253,7 @@ impl Source {
         }
         let mut text = text.trim_end().to_string();
         text.push('\n');
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         let mut out = Vec::new();
         // The values per cell, one more each.
         if kind == CardKind::Cell {

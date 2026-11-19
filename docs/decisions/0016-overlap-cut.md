@@ -28,6 +28,11 @@ nothing shortened a geometry.
 
 ## Consequences
 
-Some results stay longer than a geometric simplifier would give. A `TRCL`, a `LIKE` cell
-or a `cut` in another universe is refused or written plain (MCNP moves a `#n` by the
-cell's own `TRCL`). A geometry rewritten loses comments inside it.
+Some results stay longer than a geometric simplifier would give. A simplified cut has
+every `#n` it went through (B, and those of A and B) written out as surfaces, so it no
+longer follows later edits of those cells. Refused: a `keep` with a `TRCL` (MCNP moves a
+`#n` by the cell's own `TRCL`), a `LIKE` cell, a `keep` that a `LIKE` cell copies (it
+would be cut too) and cells in different universes (as their `u=` say); a `cut` with a
+`TRCL` is written plain. A cell that writes `#keep` takes in what is cut: it is named in
+the warnings, not changed. A geometry rewritten, plain or simplified, loses comments
+inside it.

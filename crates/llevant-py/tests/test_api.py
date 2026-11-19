@@ -690,3 +690,13 @@ def test_deck_cut_refuses_what_it_cannot_do(tmp_path):
     deck.apply(deck.cut(2, 1))
     deck.save(out)
     assert llevant.Deck.open(out).text() == deck.text()
+
+
+def test_deck_refuses_a_cut_planned_before_another():
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    first = deck.cut(2, 1)
+    second = deck.cut(2, 3)
+    deck.apply(first)
+    with pytest.raises(ValueError, match="changed since"):
+        deck.apply(second)
+    assert "#1" in deck.text()

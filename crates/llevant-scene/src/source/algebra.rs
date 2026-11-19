@@ -465,13 +465,19 @@ fn consensus(a: &Cube, b: &Cube) -> Option<Cube> {
 /// All prime implicants, by iterated consensus and absorption. Stops, with
 /// the cubes it has (still the same function), if there get to be too many.
 fn primes(cubes: &mut Vec<Cube>, stats: &mut Stats) {
+    let most = MAX_CUBES / 4;
     loop {
         let mut added = Vec::new();
-        for i in 0..cubes.len() {
+        'pairs: for i in 0..cubes.len() {
             for j in i + 1..cubes.len() {
                 if let Some(c) = consensus(&cubes[i], &cubes[j]) {
                     if !cubes.iter().chain(&added).any(|k| contains(&c, k)) {
                         added.push(c);
+                        // Bounded within a round too: each new cube is
+                        // compared with all the others.
+                        if cubes.len() + added.len() > most {
+                            break 'pairs;
+                        }
                     }
                 }
             }
@@ -482,7 +488,7 @@ fn primes(cubes: &mut Vec<Cube>, stats: &mut Stats) {
         stats.consensus += added.len();
         cubes.extend(added);
         absorb(cubes, stats);
-        if cubes.len() > MAX_CUBES / 4 {
+        if cubes.len() > most {
             return;
         }
     }
