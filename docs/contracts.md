@@ -54,6 +54,21 @@ share of pixels whose cell differs and where; the thresholds are in those tests
 model with holes at every level, with octrees and BVHs (`gaps_seen_through`); rays
 that meet an overlap, stopping at it or seeing through it, are not compared.
 
+## Cutting a cell out of another
+
+`Source::cut_plan(keep, cut, simplify)` gives cell `keep` the geometry `A ∩ ¬B` (written
+`A #B`, or in fewer terms when `simplify`). The shorter form uses only the laws of
+Boolean algebra on the surface senses as independent variables (a macrobody facet is a
+variable of its own), so it is the same region for any surfaces. Every call proves it:
+`#n` is expanded by De Morgan, and reduced ordered BDDs of the unsimplified `A ∩ ¬B` and
+of the result must be the same node, else the call is an error and nothing is written
+(`source/algebra.rs` tests, among them 400 random cuts compared with truth tables, and a
+wrong form that the proof rejects). A `keep` with a `TRCL`, a `LIKE` cell and cells in
+different universes are refused; a `cut` with a `TRCL` is written as `#n` and not
+expanded. `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
+overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
+keeps its cell, and the simplified and plain cuts label every point alike.
+
 ## Editing the input
 
 `llevant_scene::source::Source` keeps an input's migjorn tree and changes one card of

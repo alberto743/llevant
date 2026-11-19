@@ -135,6 +135,16 @@ a region, in the background. Each problem found is listed with its cells and vol
 largest first; its arrow takes you to it. **Problem display** draws them on top of
 everything in 3D.
 
+An overlap of two cells has two buttons under its row, **✂ #B from A** and
+**✂ #A from B**: the first cuts cell B out of cell A, which adds `#B` to A's geometry
+so that the two no longer overlap. Hovering shows the card before and after. By
+default the geometry written is shortened with the laws of Boolean algebra alone
+(De Morgan, distributivity, `x·¬x = 0`, absorption, consensus), which is proven equal
+to the plain `A #B` whatever the surfaces are; tick **Plain cuts** to write `A #B`
+as it is. The edit is one Undo and is not saved until you save the input. A cell with
+a `TRCL`, a `LIKE` cell and cells in different universes are refused, and cutting a
+cell out of one that lies inside it is refused (nothing would be left).
+
 ![The Check workspace: two overlaps found in the slice, hatched in magenta](../img/viewer-check.png)
 
 ## Volumes and masses

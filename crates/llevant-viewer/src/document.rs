@@ -1212,6 +1212,7 @@ impl Document {
             | Command::OpenDialog
             | Command::Reload
             | Command::EditCard(..)
+            | Command::CutCell { .. }
             | Command::EditCells(..)
             | Command::Renumber(..)
             | Command::EditSelection

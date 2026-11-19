@@ -20,6 +20,9 @@ use crate::{icons, theme};
 #[derive(Default)]
 pub struct ProblemsPanel {
     pub region: RegionPicker,
+    /// Cut cells out of each other as `A #B`, without shortening the
+    /// geometry by Boolean algebra.
+    pub plain_cuts: bool,
 }
 
 /// Go to a problem: frame `b` (or a box around `p`), slice through `p`,
@@ -67,6 +70,7 @@ fn problem_row(
     k: usize,
     l: &Label,
     volume: Option<(String, String)>,
+    simplify: bool,
     out: &mut Vec<Command>,
 ) -> bool {
     let m = &doc.model;
@@ -124,8 +128,65 @@ fn problem_row(
                     .on_hover_text(m.describe(l));
                 }
             });
+            // An overlap of two cells: either can be cut out of the other.
+            if l.status == Status::Overlap && l.involved.len() == 2 {
+                let (a, b) = (m.cell_id(l.involved[0]), m.cell_id(l.involved[1]));
+                ui.horizontal_wrapped(|ui| {
+                    for (keep, cut) in [(a, b), (b, a)] {
+                        let r = ui
+                            .small_button(format!("{} #{cut} from {keep}", icons::CLIP))
+                            .on_hover_ui(|ui| cut_preview(ui, doc, keep, cut, simplify));
+                        if r.clicked() {
+                            out.push(Command::CutCell {
+                                keep,
+                                cut,
+                                simplify,
+                            });
+                        }
+                    }
+                });
+            }
         });
     go
+}
+
+/// What cutting `cut` out of `keep` would write: the card before and after.
+fn cut_preview(ui: &mut egui::Ui, doc: &Document, keep: i64, cut: i64, simplify: bool) {
+    let Some(source) = &doc.source else {
+        ui.label("the input is not loaded");
+        return;
+    };
+    match source.cut_plan(keep, cut, simplify) {
+        Err(why) => {
+            ui.label(why);
+        }
+        Ok(p) if p.result.empty => {
+            ui.label(format!(
+                "Cell {keep} lies inside cell {cut}: cutting would leave nothing"
+            ));
+        }
+        Ok(p) => {
+            ui.label(format!("Cell {keep}, with cell {cut} cut out of it:"));
+            ui.label(theme::data(format!("- {}", p.old_card.trim_end())));
+            ui.label(theme::data(format!("+ {}", p.new_card.trim_end())));
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} terms (the plain cut has {}){}",
+                    p.result.terms_after,
+                    p.result.terms_before,
+                    if p.result.simplified {
+                        ", by Boolean algebra only"
+                    } else {
+                        ""
+                    }
+                ))
+                .weak(),
+            );
+            for w in &p.result.warnings {
+                ui.label(egui::RichText::new(w).weak());
+            }
+        }
+    }
 }
 
 impl ProblemsPanel {
@@ -154,6 +215,12 @@ impl ProblemsPanel {
                     ));
                 }
             }
+            ui.checkbox(&mut self.plain_cuts, "Plain cuts (no simplification)")
+                .on_hover_text(
+                    "An overlap can be fixed by cutting one cell out of the other. By default \
+                     the geometry written is shortened with the laws of Boolean algebra only \
+                     (proven equal to the plain A #B, whatever the surfaces are).",
+                );
             let Some(run) = &doc.results.check else {
                 return;
             };
@@ -174,7 +241,7 @@ impl ProblemsPanel {
                 let (l, vol) = (&v.labels[i], &v.volumes[i]);
                 let volume = format!("{:.2e} cm³", vol.estimate);
                 let sigma = format!("± {:.1e} cm³ (one standard deviation)", vol.sigma);
-                if problem_row(ui, doc, k, l, Some((volume, sigma)), out) {
+                if problem_row(ui, doc, k, l, Some((volume, sigma)), !self.plain_cuts, out) {
                     out.extend(go(doc, l, Some(vol.bbox), vol.bbox.center()));
                 }
             }
@@ -194,7 +261,7 @@ impl ProblemsPanel {
                 return;
             }
             for (k, (l, p)) in seen.iter().enumerate() {
-                if problem_row(ui, doc, k, l, None, out) {
+                if problem_row(ui, doc, k, l, None, !self.plain_cuts, out) {
                     out.extend(go(doc, l, None, *p));
                 }
             }

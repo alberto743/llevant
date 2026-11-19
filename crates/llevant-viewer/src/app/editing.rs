@@ -37,6 +37,17 @@ impl ViewerApp {
         });
     }
 
+    /// Cell `cut` taken out of cell `keep` (an overlap fixed), as one edit
+    /// (one Undo); both cells then selected.
+    pub(super) fn cut_cell(&mut self, keep: i64, cut: i64, simplify: bool, ctx: &egui::Context) {
+        let what = format!("cell {keep} cut by #{cut}");
+        let select = Query::Cells(vec![keep, cut]);
+        self.start_change(ctx, what, Some(select), move |source| {
+            let plan = source.cut_plan(keep, cut, simplify)?;
+            Ok(input_edits::Change::one(keep, source.apply_cut(&plan)?))
+        });
+    }
+
     /// Cells `ids` each with `changes` made, as one edit (one Undo); the
     /// cells then selected (a rule they matched may no longer).
     pub(super) fn edit_cells(

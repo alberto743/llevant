@@ -628,3 +628,65 @@ def test_no_static_tls():
     # built with local-dynamic TLS (docs/decisions/0009-mimalloc.md).
     DF_STATIC_TLS = 0x10
     assert not _elf_dynamic_flags(llevant._llevant.__file__) & DF_STATIC_TLS
+
+
+OVERLAPPING = """overlap
+1 0 -1 imp:n=1 $ ball
+2 0 -2 imp:n=1
+3 0 1 2 -3 imp:n=0
+4 0 3 imp:n=0
+
+1 so 5
+2 sx 4 5
+3 so 50
+
+"""
+
+
+def overlaps(text):
+    m = llevant.from_text(text)
+    return [g for g in m.volumes(h=1.0).problems() if g.status == "overlap"]
+
+
+def test_deck_cut_fixes_an_overlap():
+    assert overlaps(OVERLAPPING)
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    cut = deck.cut(2, 1)
+    assert cut.keep == 2 and cut.cut == 1
+    assert "#1" in cut.new_card
+    assert cut.terms_after <= cut.terms_before
+    assert not cut.empty
+    deck.apply(cut)
+    assert not overlaps(deck.text())
+    assert "$ ball" in deck.text()  # nothing else changed
+    assert deck.undo()
+    assert deck.text() == OVERLAPPING
+    assert not deck.undo()
+
+
+def test_deck_cut_is_simplified_by_boolean_algebra():
+    deck = llevant.Deck.from_text(
+        "t\n1 0 (-1:-2) 3 imp:n=1\n2 0 -1 3 imp:n=1\n\n1 so 5\n2 so 9\n3 px 0\n\n"
+    )
+    plain = deck.cut(1, 2, simplify=False)
+    cut = deck.cut(1, 2)
+    assert plain.geometry == "(-1:-2) 3 #2" and not plain.simplified
+    assert cut.geometry == "1 -2 3" and cut.simplified
+    assert cut.trace
+
+
+def test_deck_cut_refuses_what_it_cannot_do(tmp_path):
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    with pytest.raises(ValueError, match="no cell 9"):
+        deck.cut(1, 9)
+    inside = llevant.Deck.from_text("t\n1 0 -1 imp:n=1\n2 0 -1 2 imp:n=1\n\n1 so 5\n2 px 0\n\n")
+    empty = inside.cut(2, 1)
+    assert empty.empty
+    with pytest.raises(ValueError, match="inside"):
+        inside.apply(empty)
+    with pytest.raises(ValueError, match="no file"):
+        deck.save()
+    out = tmp_path / "fixed.i"
+    deck.apply(deck.cut(2, 1))
+    deck.save(out)
+    assert llevant.Deck.open(out).text() == deck.text()

@@ -99,6 +99,11 @@ impl ViewerApp {
                     }
                 }
                 Command::EditCard(kind, id, text) => self.edit_card(kind, id, text, ctx),
+                Command::CutCell {
+                    keep,
+                    cut,
+                    simplify,
+                } => self.cut_cell(keep, cut, simplify, ctx),
                 Command::EditCells(ids, changes) => self.edit_cells(ids, changes, ctx),
                 Command::Renumber(kind, pairs) => self.renumber(kind, pairs, ctx),
                 Command::AddCard {

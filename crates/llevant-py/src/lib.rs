@@ -13,6 +13,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod batch;
 mod convert;
+mod deck;
 mod field;
 mod image;
 mod model;
@@ -103,6 +104,8 @@ fn _llevant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_threads, m)?)?;
     m.add_function(wrap_pyfunction!(threads, m)?)?;
     m.add_class::<Model>()?;
+    m.add_class::<deck::Deck>()?;
+    m.add_class::<deck::Cut>()?;
     m.add_class::<results::Label>()?;
     m.add_class::<results::Surface>()?;
     m.add_class::<results::Segment>()?;

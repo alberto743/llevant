@@ -24,6 +24,8 @@ __all__ = [
     "set_threads",
     "threads",
     "Model",
+    "Deck",
+    "Cut",
     "Label",
     "Surface",
     "Segment",
@@ -554,6 +556,54 @@ class Field:
         """The value at a point, None where the field has none."""
     def values(self, points: _Points) -> npt.NDArray[np.float64]:
         """The values at many points (an `(N, 3)` array), NaN where none."""
+
+@final
+class Cut:
+    """What cutting a cell out of another would do (`Deck.cut`); nothing is
+    written until `Deck.apply`. `str(cut)` shows the card before and after.
+    """
+    keep: int
+    cut: int
+    old_card: str
+    new_card: str
+    geometry: str
+    plain: str
+    terms_before: int
+    terms_after: int
+    simplified: bool
+    empty: bool
+    trace: list[str]
+    warnings: list[str]
+
+@final
+class Deck:
+    """An MCNP input as written, to correct and save: only the cards edited
+    change, everything else stays byte for byte as it was.
+    """
+    @staticmethod
+    def open(path: Union[str, PathLike[str]]) -> Deck:
+        """Read the input file at `path`."""
+    @staticmethod
+    def from_text(text: str) -> Deck:
+        """The input text `text`."""
+    def cut(self, keep: int, cut: int, *, simplify: bool = True) -> Cut:
+        """What cutting cell `cut` out of cell `keep` would do: `#cut` added
+        to its geometry (so the two no longer overlap), and with `simplify`
+        the result put in fewer terms by Boolean algebra alone, proven equal to
+        `keep` outside `cut` for any surfaces. Nothing is written.
+        `ValueError` for a cell not in the input, cells in different
+        universes, a `LIKE` cell and a `keep` with a `TRCL`.
+        """
+    def apply(self, cut: Cut) -> None:
+        """Write a cut into the deck. `ValueError` if it has nothing to write
+        (`keep` lies inside `cut`).
+        """
+    def undo(self) -> bool:
+        """Undo the last cut applied; false if there is none."""
+    def text(self) -> str:
+        """The input as it is now."""
+    def save(self, path: Union[str, PathLike[str], None] = None) -> None:
+        """Write the input to `path` (default: the file it was read from)."""
 
 @final
 class Model:

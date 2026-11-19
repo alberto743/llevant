@@ -1182,3 +1182,84 @@ fn edit_time_in_a_universe_on_the_big_model() {
          edit from inside it {inside:.2} s"
     );
 }
+
+/// An overlap fixed from the Problems panel's command: cell 2 cut out of by
+/// cell 1 (shortened by Boolean algebra), one Undo, and a cut that cannot be
+/// made (a cell inside the other) changes nothing.
+#[test]
+fn an_overlap_fixed_by_cutting_a_cell() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let dir = std::env::temp_dir().join(format!("llevant-viewer-cut-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("overlap.i");
+    let text = "overlap\n1 0 -1 imp:n=1\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\
+                4 0 1 -5 imp:n=0\n5 0 5 imp:n=0\n\n\
+                1 so 5\n2 sx 4 5\n3 px 0\n4 so 9\n5 so 50\n\n";
+    std::fs::write(&path, text).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1300.0))
+        .wgpu_setup(llevant_viewer::app::wgpu_options().wgpu_setup)
+        .build_eframe(|cc| ViewerApp::empty(cc).unwrap());
+    let ctx = h.ctx.clone();
+    h.state_mut().open_file(path.clone(), &ctx);
+    step_until(&mut h, "the model and its cards", |a| {
+        a.document()
+            .is_some_and(|d| d.model.is_complete() && d.source.is_some())
+            && !a.is_loading()
+    });
+    let card = |h: &Harness<'_, ViewerApp>, id: i64| {
+        let d = h.state().document().unwrap();
+        d.source.as_ref().unwrap().cell(id).unwrap().text.clone()
+    };
+    let send = |h: &mut Harness<'_, ViewerApp>, c: Command| {
+        step_until(h, "the jobs before", |a| {
+            a.document().is_none_or(|d| d.results.jobs.is_empty())
+        });
+        let ctx = h.ctx.clone();
+        h.state_mut().send(c, &ctx);
+        h.step();
+        step_until(h, "the edit to compile", |a| !a.is_loading());
+        last_said(h.state().document().unwrap())
+    };
+    let before = card(&h, 2);
+    let msg = send(
+        &mut h,
+        Command::CutCell {
+            keep: 2,
+            cut: 3,
+            simplify: true,
+        },
+    );
+    assert!(msg.contains("cell 2 cut by #3"), "{msg}");
+    assert_eq!(h.state().input_edits(), (1, true));
+    assert!(
+        card(&h, 2).contains("#3") || card(&h, 2) != before,
+        "{}",
+        card(&h, 2)
+    );
+    assert_eq!(
+        card(&h, 3).trim_end(),
+        "3 0 -1 3 imp:n=1",
+        "the other cell is as it was"
+    );
+    send(&mut h, Command::UndoInputEdit);
+    assert_eq!(h.state().input_edits(), (0, false));
+    assert_eq!(card(&h, 2), before);
+
+    // Cell 3 lies inside cell 1: cutting it out of cell 3 leaves nothing.
+    let msg = send(
+        &mut h,
+        Command::CutCell {
+            keep: 3,
+            cut: 1,
+            simplify: true,
+        },
+    );
+    assert!(msg.contains("inside"), "{msg}");
+    assert_eq!(h.state().input_edits(), (0, false));
+    let _ = std::fs::remove_dir_all(&dir);
+}

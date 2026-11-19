@@ -21,3 +21,4 @@ supersedes the old one; the old one stays, marked superseded.
 | [0013](0013-viewer-tracing-latency.md) | The 3D view is traced for latency: one job per still view, previews bound each ray's work | 2026-11-14 |
 | [0014](0014-gpu-exit-bound.md) | A cell's GPU exit is where its program can first turn false | 2026-11-14 |
 | [0015](0015-gpu-state-per-model-and-timing.md) | The GPU keeps per-level state for the model's own levels; GPU frames are timed back to back | 2026-11-15 |
+| [0016](0016-overlap-cut.md) | An overlap is fixed by cutting one cell out of the other, shortened by Boolean algebra only | 2026-11-19 |
