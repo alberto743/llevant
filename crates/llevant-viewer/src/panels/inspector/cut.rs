@@ -146,6 +146,7 @@ fn proposed(ui: &mut egui::Ui, plan: &CutExpand, out: &mut Vec<Command>) {
 }
 
 /// Where the overlap stands, from the check of what the cut changed.
+#[derive(Clone)]
 enum Verdict {
     /// The check is running.
     Running,
@@ -174,29 +175,41 @@ fn verdict(doc: &Document, f: &CutFlow, check_before: usize) -> Verdict {
         return Verdict::NotChecked;
     };
     let v = &run.volumes;
-    let mut both = false;
-    let mut others: Vec<i64> = Vec::new();
-    for &i in &v.problems() {
-        let l = &v.labels[i];
-        if l.status != llevant::Status::Overlap || !l.involved.contains(&a) {
-            continue;
-        }
-        if l.involved.contains(&b) {
-            both = true;
-        }
-        for &c in &l.involved {
-            let id = m.cell_id(c);
-            if c != a && c != b && !others.contains(&id) {
-                others.push(id);
-            }
-        }
-    }
-    others.sort_unstable();
+    let groups: Vec<&[u32]> = v
+        .problems()
+        .iter()
+        .filter(|&&i| v.labels[i].status == llevant::Status::Overlap)
+        .map(|&i| v.labels[i].involved.as_slice())
+        .collect();
+    let (both, others) = judge(&groups, a, b, |c| m.cell_id(c));
     if both {
         Verdict::Remains(others)
     } else {
         Verdict::Solved(others)
     }
+}
+
+/// From the overlaps involving the changed cell `a`: whether `b` is still in
+/// one (`both`), and the other cells overlapping `a`, by id.
+fn judge(overlaps: &[&[u32]], a: u32, b: u32, id: impl Fn(u32) -> i64) -> (bool, Vec<i64>) {
+    let mut both = false;
+    let mut others: Vec<i64> = Vec::new();
+    for involved in overlaps {
+        if !involved.contains(&a) {
+            continue;
+        }
+        if involved.contains(&b) {
+            both = true;
+        }
+        for &c in *involved {
+            let i = id(c);
+            if c != a && c != b && !others.contains(&i) {
+                others.push(i);
+            }
+        }
+    }
+    others.sort_unstable();
+    (both, others)
 }
 
 fn cells_list(ids: &[i64]) -> String {
@@ -219,6 +232,11 @@ fn verifying(
     geometry(ui, plan, true);
     notes(ui, &plan.warnings);
     let verdict = verdict(doc, f, check_before);
+    conclusion(ui, verdict, f.keep, f.cut, out);
+}
+
+/// The verdict, and what can be done about it.
+fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mut Vec<Command>) {
     let green = egui::Color32::from_rgb(96, 200, 120);
     let revert = |ui: &mut egui::Ui, out: &mut Vec<Command>| {
         if ui
@@ -253,17 +271,13 @@ fn verifying(
                 green,
                 format!(
                     "Overlap solved: the check found no overlap of cells {} and {}",
-                    f.keep, f.cut
+                    keep, cut
                 ),
             );
             if !others.is_empty() {
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
-                    format!(
-                        "cell {} still overlaps cells {}",
-                        f.keep,
-                        cells_list(&others)
-                    ),
+                    format!("cell {} still overlaps cells {}", keep, cells_list(&others)),
                 );
             }
             ui.horizontal(|ui| {
@@ -277,7 +291,7 @@ fn verifying(
                 ui.visuals().error_fg_color,
                 format!(
                     "The overlap remains: the check still found cells {} and {} overlapping",
-                    f.keep, f.cut
+                    keep, cut
                 ),
             );
             if !others.is_empty() {
@@ -348,4 +362,60 @@ fn review(ui: &mut egui::Ui, s: &Simplified, out: &mut Vec<Command>) {
             out.push(Command::CancelCutFlow);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn the_overlap_is_judged_from_the_cells_involved() {
+        let id = |c: u32| i64::from(c) * 10;
+        // Cells a=1, b=2: the pair still overlaps, and cell 3 as well.
+        let (both, others) = judge(&[&[1, 2], &[1, 3], &[4, 5]], 1, 2, id);
+        assert!(both);
+        assert_eq!(others, vec![30]);
+        // Only a third cell overlaps a: solved, with that cell named.
+        let (both, others) = judge(&[&[1, 3], &[2, 3]], 1, 2, id);
+        assert!(!both);
+        assert_eq!(others, vec![30]);
+        // Nothing involves a.
+        assert_eq!(judge(&[&[2, 3]], 1, 2, id), (false, vec![]));
+        assert_eq!(judge(&[], 1, 2, id), (false, vec![]));
+    }
+
+    fn shown(verdict: Verdict) -> egui_kittest::Harness<'static, Vec<Command>> {
+        egui_kittest::Harness::new_ui_state(
+            move |ui, out: &mut Vec<Command>| conclusion(ui, verdict.clone(), 2, 3, out),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn when_the_overlap_remains_only_revert_and_keep_are_offered() {
+        let mut h = shown(Verdict::Remains(vec![7]));
+        h.run();
+        h.get_by_label_contains("The overlap remains");
+        h.get_by_label_contains("cells 7");
+        assert!(
+            h.query_by_label("Simplify").is_none(),
+            "nothing to simplify"
+        );
+        h.get_by_label("Keep it");
+        h.get_by_label("Revert").click();
+        h.run();
+        assert!(matches!(h.state().as_slice(), [Command::RevertCut]));
+    }
+
+    #[test]
+    fn when_the_overlap_is_solved_simplify_is_offered_as_well() {
+        let mut h = shown(Verdict::Solved(vec![]));
+        h.run();
+        h.get_by_label_contains("Overlap solved");
+        h.get_by_label("Revert");
+        h.get_by_label("Simplify").click();
+        h.run();
+        assert!(matches!(h.state().as_slice(), [Command::CutSimplify]));
+    }
 }
