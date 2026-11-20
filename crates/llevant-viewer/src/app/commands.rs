@@ -99,31 +99,47 @@ impl ViewerApp {
                     }
                 }
                 Command::EditCard(kind, id, text) => self.edit_card(kind, id, text, ctx),
-                Command::CutCell {
-                    keep,
-                    cut,
-                    simplify,
-                } => {
+                Command::PreviewCut { keep, cut } => {
                     if let Some(d) = &mut self.doc {
-                        d.cut_preview = None;
-                    }
-                    self.cut_cell(keep, cut, simplify, ctx)
-                }
-                Command::PreviewCut {
-                    keep,
-                    cut,
-                    simplify,
-                } => {
-                    if let Some(d) = &mut self.doc {
-                        d.cut_preview = d.source.as_ref().map(|s| {
-                            crate::cutpreview::CutPreview::start(ctx, s, keep, cut, simplify)
+                        // Only a cut not yet written is replaced by another.
+                        let busy = d.cut_flow.as_ref().is_some_and(|f| {
+                            f.is_of(d.source.as_ref())
+                                && !matches!(f.phase, crate::cutflow::Phase::Planning(_))
                         });
-                        self.frame.show(frame::Panel::Inspector);
+                        if busy {
+                            d.messages.warn(
+                                "finish or revert the cut under way first (in the inspector)"
+                                    .to_string(),
+                            );
+                        } else {
+                            d.cut_flow = d
+                                .source
+                                .as_ref()
+                                .map(|s| crate::cutflow::CutFlow::start(ctx, s, keep, cut));
+                            self.frame.show(frame::Panel::Inspector);
+                        }
                     }
                 }
-                Command::CancelCutPreview => {
+                Command::CutApply(plan) => self.cut_apply(plan, ctx),
+                Command::CutSimplify => {
                     if let Some(d) = &mut self.doc {
-                        d.cut_preview = None;
+                        if let (Some(f), Some(s)) = (&mut d.cut_flow, &d.source) {
+                            f.simplify(ctx, s);
+                        }
+                    }
+                }
+                Command::CutAccept(s) => self.cut_accept(s, ctx),
+                Command::RevertCut => {
+                    if let Some(d) = &mut self.doc {
+                        d.cut_flow = None;
+                    }
+                    self.undo_input_edit(ctx);
+                }
+                Command::CancelCutFlow => {
+                    if let Some(d) = &mut self.doc {
+                        if let Some(f) = d.cut_flow.take() {
+                            f.stop();
+                        }
                     }
                 }
                 Command::EditCells(ids, changes) => self.edit_cells(ids, changes, ctx),

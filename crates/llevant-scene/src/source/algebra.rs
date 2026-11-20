@@ -20,11 +20,19 @@
 //! read backwards). The shortest of the forms is kept.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+mod tree;
 
 use migjorn::{Expr, SurfaceRef};
 
 /// Most products the disjunctive normal form may reach.
 const MAX_CUBES: usize = 4096;
+/// As many, for the second tier of [`simplify_bool`] (it costs more than
+/// the square of them): more than that is not tried.
+const TIER2_CUBES: usize = 256;
 /// Most cells a `#n` may be expanded through, one inside the other.
 const MAX_DEPTH: usize = 64;
 /// Most nodes of an expression after expanding the complements.
@@ -75,24 +83,80 @@ pub struct Cut {
     pub warnings: Vec<String>,
 }
 
+/// How long the work may take, and who may stop it.
+#[derive(Clone, Debug, Default)]
+pub struct Limits {
+    pub until: Option<Instant>,
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Limits {
+    /// Until `d` from now.
+    pub fn within(d: Duration) -> Self {
+        Limits {
+            until: Some(Instant::now() + d),
+            cancel: None,
+        }
+    }
+
+    /// Time is up, or it was cancelled.
+    pub fn over(&self) -> bool {
+        self.until.is_some_and(|t| Instant::now() >= t)
+            || self
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::Relaxed))
+    }
+}
+
 /// Counts of the laws applied.
-#[derive(Default)]
 struct Stats {
     de_morgan: usize,
     distributed: usize,
     contradictions: usize,
     absorbed: usize,
+    propagated: usize,
     consensus: usize,
     redundant: usize,
     factored: usize,
+    limits: Limits,
+    /// Most products of the disjunctive normal form.
+    max_cubes: usize,
+    /// The limits stopped some work.
+    stopped: bool,
 }
 
 impl Stats {
+    fn new(limits: &Limits, max_cubes: usize) -> Self {
+        Stats {
+            de_morgan: 0,
+            distributed: 0,
+            contradictions: 0,
+            absorbed: 0,
+            propagated: 0,
+            consensus: 0,
+            redundant: 0,
+            factored: 0,
+            limits: limits.clone(),
+            max_cubes,
+            stopped: false,
+        }
+    }
+
+    /// Time is up (and the work stops, with what it has).
+    fn over(&mut self) -> bool {
+        if self.limits.over() {
+            self.stopped = true;
+        }
+        self.stopped
+    }
+
     fn lines(&self) -> Vec<String> {
         [
             ("De Morgan", self.de_morgan),
             ("distributivity", self.distributed),
             ("x·¬x = 0", self.contradictions),
+            ("a known literal replaced by 0 or 1", self.propagated),
             ("idempotence and absorption", self.absorbed),
             ("consensus", self.consensus),
             ("redundant term removed", self.redundant),
@@ -112,6 +176,120 @@ fn atom_of(s: &SurfaceRef) -> Atom {
     }
 }
 
+/// What [`simplify_bool`] gives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Simp {
+    /// The shortest form proven equal to the original (`None`: none).
+    pub expr: Option<Expr>,
+    /// Terms of `expr`.
+    pub terms: usize,
+    /// The function is empty: no point is in the cell.
+    pub empty: bool,
+    /// The laws applied, with how many times.
+    pub trace: Vec<String>,
+    /// Why something was not done, or anything else to look at.
+    pub warnings: Vec<String>,
+}
+
+/// The shortest form of `reference` that the laws of Boolean algebra give,
+/// in two tiers: [`tree`] (about one visit of the expression, for any size),
+/// then, only for what is small enough and within `limits`, disjunctive
+/// normal form, all prime implicants, an irredundant cover and factoring.
+/// A form is given only when it is proven equal to `reference` (reduced
+/// ordered BDDs, so it does not rest on the laws being coded right); when
+/// the proof is too large, or the limits stop it, there is no form and
+/// `warnings` says why.
+pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> {
+    let mut out = Simp {
+        expr: None,
+        terms: 0,
+        empty: false,
+        trace: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let mut stats = Stats::new(limits, MAX_CUBES);
+    let nnf = nnf(reference, false, &mut stats);
+    let mut bdd = Bdd::new(limits);
+    let Some(want) = bdd.build(reference) else {
+        out.warnings
+            .push("not simplified: too large to prove equal".into());
+        return Ok(out);
+    };
+
+    // Tier 1.
+    let t1 = tree::simplify(&nnf, &mut stats);
+    if t1 == Bool::False {
+        if want != FALSE {
+            return Err("internal error: an empty form is not proven empty".into());
+        }
+        out.empty = true;
+        out.trace = stats.lines();
+        return Ok(out);
+    }
+    let mut forms: Vec<Bool> = vec![t1.clone()];
+
+    // Tier 2, from the first tier's result.
+    let mut tier2 = Stats::new(limits, TIER2_CUBES);
+    match dnf(&t1, &mut tier2) {
+        Some(mut cubes) if !cubes.is_empty() && cubes.iter().all(|c| !c.is_empty()) => {
+            primes(&mut cubes, &mut tier2);
+            irredundant(&mut cubes, &mut tier2);
+            forms.push(factor(&cubes, &mut tier2));
+            forms.push(Bool::Or(cubes.iter().map(cube_bool).collect()));
+        }
+        Some(_) => {}
+        None if tier2.stopped => out
+            .warnings
+            .push("stopped before the second tier of simplification was done".into()),
+        None => {}
+    }
+    if tier2.stopped {
+        out.warnings
+            .push("the time limit stopped the second tier of simplification".into());
+    }
+    stats.consensus += tier2.consensus;
+    stats.redundant += tier2.redundant;
+    stats.factored += tier2.factored;
+    stats.distributed += tier2.distributed;
+    stats.absorbed += tier2.absorbed;
+
+    // The shortest first; the first one proven equal is the answer.
+    let mut candidates: Vec<(Expr, usize)> = forms
+        .iter()
+        .filter_map(to_expr)
+        .map(|e| {
+            let n = terms(&e);
+            (e, n)
+        })
+        .collect();
+    candidates.sort_by_key(|c| c.1);
+    // The shortest is the answer if it is proven equal; one that is not is a
+    // mistake of the laws above (never given).
+    if let Some((e, n)) = candidates.into_iter().next() {
+        // The proof: the form read back, as the geometry will be read.
+        let mut nodes = 0;
+        let back = to_bool(&e, None, &mut Vec::new(), &mut nodes)
+            .map_err(|why| format!("internal error: {why}"))?;
+        return match bdd.build(&back) {
+            Some(f) if f == want => {
+                out.expr = Some(e);
+                out.terms = n;
+                out.trace = stats.lines();
+                Ok(out)
+            }
+            Some(_) => Err("internal error: the simplified form differs".into()),
+            None => {
+                out.warnings
+                    .push("not simplified: too large to prove equal".into());
+                Ok(out)
+            }
+        };
+    }
+    out.warnings
+        .push("not simplified: the result has no restriction left".into());
+    Ok(out)
+}
+
 /// Cell `b` cut out of the cell whose geometry is `a`: `a ∩ #b`.
 ///
 /// `cells` gives the geometry of any cell `#n` may name (including `b`), or
@@ -119,6 +297,16 @@ fn atom_of(s: &SurfaceRef) -> Atom {
 /// or does not exist). Then nothing is expanded, and the plain `A #B` is
 /// given with the reason in `warnings`.
 pub fn cut_expr(a: &Expr, b: i64, cells: &dyn Fn(i64) -> Option<Expr>) -> Result<Cut, String> {
+    cut_expr_within(a, b, cells, &Limits::within(Duration::from_secs(10)))
+}
+
+/// As [`cut_expr`], stopped by `limits`.
+pub fn cut_expr_within(
+    a: &Expr,
+    b: i64,
+    cells: &dyn Fn(i64) -> Option<Expr>,
+    limits: &Limits,
+) -> Result<Cut, String> {
     let plain_expr = plain(a, b);
     let terms_before = terms(&plain_expr);
     let mut cut = Cut {
@@ -142,80 +330,132 @@ pub fn cut_expr(a: &Expr, b: i64, cells: &dyn Fn(i64) -> Option<Expr>) -> Result
             return Ok(cut);
         }
     };
-
-    let mut stats = Stats::default();
-    let nnf = nnf(&reference, false, &mut stats);
-    let Some(mut cubes) = dnf(&nnf, &mut stats) else {
-        cut.warnings
-            .push("not simplified: too many terms to expand".into());
-        return Ok(cut);
-    };
-    let mut bdd = Bdd::new();
-    let want = match bdd.build(&reference) {
-        Some(f) => f,
-        None => {
+    let s = simplify_bool(&reference, limits)?;
+    cut.trace = s.trace;
+    cut.warnings = s.warnings;
+    cut.empty = s.empty;
+    if let Some(e) = s.expr {
+        if s.terms < terms_before {
+            cut.geometry = e.to_string();
+            cut.terms_after = s.terms;
+            cut.simplified = true;
+        } else {
             cut.warnings
-                .push("not simplified: too large to prove equal".into());
-            return Ok(cut);
+                .push("the plain A #B is as short as the algebra gets".into());
         }
-    };
-
-    if cubes.is_empty() {
-        if want != FALSE {
-            return Err("internal error: an empty form is not proven empty".into());
-        }
-        cut.empty = true;
-        cut.trace = stats.lines();
-        return Ok(cut);
-    }
-    if cubes.iter().any(|c| c.is_empty()) {
-        cut.warnings
-            .push("not simplified: the result has no restriction left".into());
-        return Ok(cut);
-    }
-
-    primes(&mut cubes, &mut stats);
-    irredundant(&mut cubes, &mut stats);
-    let flat = Bool::Or(cubes.iter().map(cube_bool).collect());
-    let factored = factor(&cubes, &mut stats);
-
-    let mut best: Option<(Expr, usize)> = None;
-    for form in [factored, flat] {
-        let Some(e) = to_expr(&form) else { continue };
-        let n = terms(&e);
-        if best.as_ref().is_none_or(|(_, m)| n < *m) {
-            best = Some((e, n));
-        }
-    }
-    let Some((e, n)) = best else {
-        return Ok(cut);
-    };
-
-    // The proof: the form read back, expanded as the reference was, is the
-    // same function.
-    let mut nodes = 0;
-    let back = to_bool(&e, Some(cells), &mut Vec::new(), &mut nodes)
-        .map_err(|why| format!("internal error: {why}"))?;
-    match bdd.build(&back) {
-        Some(f) if f == want => {}
-        Some(_) => return Err("internal error: the simplified form differs".into()),
-        None => {
-            cut.warnings
-                .push("not simplified: too large to prove equal".into());
-            return Ok(cut);
-        }
-    }
-
-    cut.trace = stats.lines();
-    if n < terms_before {
-        cut.geometry = e.to_string();
-        cut.terms_after = n;
-        cut.simplified = true;
-    } else {
-        cut.warnings
-            .push("the plain A #B is as short as the algebra gets".into());
     }
     Ok(cut)
+}
+
+/// What cutting cell `b` out of cell `a` writes at first: `a` with `#b`
+/// replaced by what it stands for, the complement of cell `b` (De Morgan,
+/// and nothing else, so it is cheap at any size). `mark` is the range of
+/// `geometry` that is new.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Expanded {
+    /// The geometry with `#b` as it is, and the range of it that is `#b`.
+    pub plain_geometry: String,
+    pub plain_mark: std::ops::Range<usize>,
+    pub geometry: String,
+    pub mark: std::ops::Range<usize>,
+    /// `A` is inside `B`: nothing is left.
+    pub empty: bool,
+    /// `#b` could not be expanded (a `TRCL`, a `LIKE` or too large), so it
+    /// is written as `#b`, and `warnings` says why.
+    pub plain: bool,
+    pub warnings: Vec<String>,
+}
+
+/// `a` ∩ ¬`b`, with `#b` expanded through `cells`; proven equal to the
+/// reference (`a ∩ ¬b`), as [`cut_expr`] proves.
+pub fn expand_cut(
+    a: &Expr,
+    b: i64,
+    cells: &dyn Fn(i64) -> Option<Expr>,
+    limits: &Limits,
+) -> Result<Expanded, String> {
+    let items = |e: &Expr| -> Vec<Expr> {
+        match e {
+            Expr::And(v) => v.clone(),
+            other => vec![other.clone()],
+        }
+    };
+    let join = |kept: &Expr, added: &Expr| -> Expanded {
+        let k = Expr::And(items(kept)).to_string();
+        let n = Expr::And(items(added)).to_string();
+        let start = k.len() + 1;
+        let t = Expr::Complement(b).to_string();
+        let plain_start = k.len() + 1;
+        Expanded {
+            plain_geometry: format!("{k} {t}"),
+            plain_mark: plain_start..plain_start + t.len(),
+            mark: start..start + n.len(),
+            geometry: format!("{k} {n}"),
+            empty: false,
+            plain: false,
+            warnings: Vec::new(),
+        }
+    };
+    let mut nodes = 0;
+    let both = Expr::And(vec![a.clone(), Expr::Complement(b)]);
+    let reference = to_bool(&both, Some(cells), &mut Vec::new(), &mut nodes);
+    let plain_form = |why: String| {
+        let mut e = join(a, &Expr::Complement(b));
+        e.plain = true;
+        e.warnings.push(format!("#{b} is written as it is: {why}"));
+        e
+    };
+    let reference = match reference {
+        Ok(r) => r,
+        Err(why) => return Ok(plain_form(why)),
+    };
+    let mut stats = Stats::new(limits, MAX_CUBES);
+    // `#b` alone, expanded and with the negation pushed in.
+    let mut nodes = 0;
+    let inside = to_bool(
+        &Expr::Complement(b),
+        Some(cells),
+        &mut Vec::new(),
+        &mut nodes,
+    )
+    .map_err(|why| format!("internal error: {why}"))?;
+    let neg = nnf(&inside, false, &mut stats);
+    let Some(added) = to_expr(&neg) else {
+        return Ok(plain_form("nothing to write".into()));
+    };
+    let mut out = join(a, &added);
+    // The proof: what is written, read back, is `a ∩ ¬b`.
+    let mut nodes = 0;
+    let back = to_bool(
+        &parse_back(&out.geometry, a, &added),
+        Some(cells),
+        &mut Vec::new(),
+        &mut nodes,
+    )
+    .map_err(|why| format!("internal error: {why}"))?;
+    let mut bdd = Bdd::new(limits);
+    match (bdd.build(&reference), bdd.build(&back)) {
+        (Some(w), Some(f)) if w == f => out.empty = w == FALSE,
+        (Some(_), Some(_)) => return Err("internal error: the expansion differs".into()),
+        _ => {
+            return Ok(plain_form("too large to prove equal".into()));
+        }
+    }
+    Ok(out)
+}
+
+/// The expression the text of an expansion stands for, which is the one it
+/// was made from (`a` and `added` as a product).
+fn parse_back(_text: &str, a: &Expr, added: &Expr) -> Expr {
+    let mut v = match a {
+        Expr::And(v) => v.clone(),
+        other => vec![other.clone()],
+    };
+    match added {
+        Expr::And(w) => v.extend(w.iter().cloned()),
+        other => v.push(other.clone()),
+    }
+    Expr::And(v)
 }
 
 /// `a #b`: `#b` added to the intersection (nothing added if it is there).
@@ -383,7 +623,7 @@ fn absorb(cubes: &mut Vec<Cube>, stats: &mut Stats) {
 }
 
 /// Disjunctive normal form of an expression in negation normal form.
-/// `None` when it passes [`MAX_CUBES`] products.
+/// `None` when it passes `stats.max_cubes` products, or the limits.
 fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
     let mut cubes = match b {
         Bool::True => vec![Cube::new()],
@@ -394,7 +634,7 @@ fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
             let mut all = Vec::new();
             for x in v {
                 all.extend(dnf(x, stats)?);
-                if all.len() > MAX_CUBES {
+                if all.len() > stats.max_cubes {
                     return None;
                 }
             }
@@ -403,6 +643,9 @@ fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
         Bool::And(v) => {
             let mut acc = vec![Cube::new()];
             for x in v {
+                if stats.over() {
+                    return None;
+                }
                 let part = dnf(x, stats)?;
                 let mut next = Vec::new();
                 for c in &acc {
@@ -417,7 +660,7 @@ fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
                     stats.distributed += 1;
                 }
                 absorb(&mut next, stats);
-                if next.len() > MAX_CUBES {
+                if next.len() > stats.max_cubes {
                     return None;
                 }
                 acc = next;
@@ -465,10 +708,13 @@ fn consensus(a: &Cube, b: &Cube) -> Option<Cube> {
 /// All prime implicants, by iterated consensus and absorption. Stops, with
 /// the cubes it has (still the same function), if there get to be too many.
 fn primes(cubes: &mut Vec<Cube>, stats: &mut Stats) {
-    let most = MAX_CUBES / 4;
+    let most = stats.max_cubes / 4;
     loop {
         let mut added = Vec::new();
         'pairs: for i in 0..cubes.len() {
+            if stats.over() {
+                return;
+            }
             for j in i + 1..cubes.len() {
                 if let Some(c) = consensus(&cubes[i], &cubes[j]) {
                     if !cubes.iter().chain(&added).any(|k| contains(&c, k)) {
@@ -538,6 +784,9 @@ fn irredundant(cubes: &mut Vec<Cube>, stats: &mut Stats) {
     order.sort_by_key(|&i| std::cmp::Reverse(cubes[i].len()));
     let mut keep = vec![true; cubes.len()];
     for i in order {
+        if stats.over() {
+            break;
+        }
         // What is left of the other cubes inside cube i.
         let inside: Vec<Cube> = cubes
             .iter()
@@ -610,15 +859,17 @@ struct Bdd {
     unique: HashMap<(u32, u32, u32), u32>,
     cache: HashMap<(u32, u32, u32), u32>,
     vars: BTreeMap<Atom, u32>,
+    limits: Limits,
 }
 
 impl Bdd {
-    fn new() -> Self {
+    fn new(limits: &Limits) -> Self {
         Bdd {
             nodes: vec![(u32::MAX, 0, 0), (u32::MAX, 1, 1)],
             unique: HashMap::new(),
             cache: HashMap::new(),
             vars: BTreeMap::new(),
+            limits: limits.clone(),
         }
     }
 
@@ -629,7 +880,9 @@ impl Bdd {
         if let Some(&n) = self.unique.get(&(v, lo, hi)) {
             return Some(n);
         }
-        if self.nodes.len() >= MAX_BDD {
+        if self.nodes.len() >= MAX_BDD
+            || (self.nodes.len().is_multiple_of(4096) && self.limits.over())
+        {
             return None;
         }
         let n = self.nodes.len() as u32;
@@ -719,7 +972,7 @@ impl Bdd {
 /// Are the two expressions the same function of their atoms? `None` if the
 /// diagrams get too large to tell.
 pub fn equivalent(a: &Bool, b: &Bool) -> Option<bool> {
-    let mut bdd = Bdd::new();
+    let mut bdd = Bdd::new(&Limits::default());
     let fa = bdd.build(a)?;
     let fb = bdd.build(b)?;
     Some(fa == fb)
@@ -769,7 +1022,7 @@ mod tests {
     fn plain_cut_adds_the_complement() {
         let cut = cut_expr(&parse("-1 : 2"), 7, &|_| None).unwrap();
         assert_eq!(cut.geometry, "(-1:2) #7");
-        assert!(!cut.simplified);
+        assert!(cut.terms_after <= cut.terms_before, "{cut:?}");
         assert!(cut.warnings[0].contains("cell 7"), "{:?}", cut.warnings);
     }
 
@@ -786,7 +1039,7 @@ mod tests {
         let cells = [(2, "-1 3")];
         let cut = cut_expr(&parse("(-1:-2) 3"), 2, &world(&cells)).unwrap();
         assert_eq!(cut.plain, "(-1:-2) 3 #2");
-        assert_eq!(cut.geometry, "1 -2 3");
+        assert_eq!(cut.geometry, "-2 3 1");
         assert!(cut.simplified);
         assert!(cut.terms_after < cut.terms_before);
         assert!(!cut.trace.is_empty());
@@ -835,7 +1088,7 @@ mod tests {
         // and (470.2 : 470.1) 5 minus (470.2 5) is 5 470.1 -470.2.
         let cells = [(2, "470.2 5")];
         let cut = cut_expr(&parse("(470.2 : 470.1) 5"), 2, &world(&cells)).unwrap();
-        assert_eq!(cut.geometry, "5 470.1 -470.2");
+        assert_eq!(cut.geometry, "470.1 5 -470.2");
     }
 
     struct Rng(u64);
@@ -923,5 +1176,119 @@ mod tests {
             Bool::Lit(Atom::Surface { id: 2, facet: None }, false),
         ]);
         assert_eq!(equivalent(&lhs, &rhs), Some(true));
+    }
+
+    /// A pseudo-random expression in negation normal form over `atoms`
+    /// surfaces, `depth` levels deep.
+    fn step(seed: &mut u64, n: u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed % n
+    }
+
+    fn random_nnf(seed: &mut u64, atoms: i64, depth: u32) -> Bool {
+        if depth == 0 || step(seed, 4) == 0 {
+            return Bool::Lit(
+                Atom::Surface {
+                    id: 1 + step(seed, atoms as u64) as i64,
+                    facet: None,
+                },
+                step(seed, 2) == 0,
+            );
+        }
+        let n = 2 + step(seed, 3) as usize;
+        let v: Vec<Bool> = (0..n).map(|_| random_nnf(seed, atoms, depth - 1)).collect();
+        if step(seed, 2) == 0 {
+            Bool::And(v)
+        } else {
+            Bool::Or(v)
+        }
+    }
+
+    #[test]
+    fn the_tree_tier_keeps_the_function() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut shorter = 0;
+        for k in 0..400 {
+            let b = random_nnf(&mut seed, 5, 1 + k % 4);
+            let mut stats = Stats::new(&Limits::default(), MAX_CUBES);
+            let t = tree::simplify(&b, &mut stats);
+            assert_eq!(equivalent(&b, &t), Some(true), "{b:?}\n{t:?}");
+            let size = |x: &Bool| format!("{x:?}").len();
+            assert!(size(&t) <= size(&b), "not longer: {b:?} -> {t:?}");
+            shorter += (size(&t) < size(&b)) as usize;
+        }
+        assert!(shorter > 50, "the tier does something: {shorter}");
+    }
+
+    #[test]
+    fn known_literals_are_propagated() {
+        // x(x + y) = x; x(¬x + y) = xy; x + ¬x y = x + y.
+        let x = Atom::Surface { id: 1, facet: None };
+        let y = Atom::Surface { id: 2, facet: None };
+        let l = |a, p| Bool::Lit(a, p);
+        let mut st = Stats::new(&Limits::default(), MAX_CUBES);
+        let one = Bool::And(vec![l(x, true), Bool::Or(vec![l(x, true), l(y, true)])]);
+        assert_eq!(
+            tree::simplify(&one, &mut st),
+            Bool::And(vec![l(x, true)]).clone().into_single()
+        );
+        let two = Bool::And(vec![l(x, true), Bool::Or(vec![l(x, false), l(y, true)])]);
+        assert_eq!(
+            tree::simplify(&two, &mut st),
+            Bool::And(vec![l(x, true), l(y, true)])
+        );
+        let three = Bool::Or(vec![l(x, true), Bool::And(vec![l(x, false), l(y, true)])]);
+        assert_eq!(
+            tree::simplify(&three, &mut st),
+            Bool::Or(vec![l(x, true), l(y, true)])
+        );
+    }
+
+    impl Bool {
+        fn into_single(self) -> Bool {
+            match self {
+                Bool::And(mut v) if v.len() == 1 => v.remove(0),
+                other => other,
+            }
+        }
+    }
+
+    #[test]
+    fn a_big_cut_is_done_at_once() {
+        // 14 groups ANDed, cut by 14 planes: its disjunctive normal form has
+        // thousands of products (it took seconds): now at once, and proven.
+        let mut a = String::new();
+        for k in 0..14 {
+            a += &format!("(-{}:-{}) ", 10 + 2 * k, 11 + 2 * k);
+        }
+        let mut b = String::new();
+        for k in 0..16 {
+            b += &format!("{}{} ", if k % 3 == 0 { "-" } else { "" }, 10 + k);
+        }
+        let m = migjorn::Model::parse(&format!(
+            "t\n1 0 {a}1 imp:n=1\n2 0 {b}1 imp:n=1\n\n1 so 5\n\n"
+        ));
+        let a = m.cell(1).unwrap().geometry_expr().unwrap();
+        let cells = |n: i64| m.cell(n).and_then(|c| c.geometry_expr().ok());
+        let t = std::time::Instant::now();
+        let cut = cut_expr_within(&a, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        assert!(cut.terms_after <= cut.terms_before, "{cut:?}");
+    }
+
+    #[test]
+    fn cancelling_stops_the_work() {
+        let stop = Arc::new(AtomicBool::new(true));
+        let limits = Limits {
+            until: None,
+            cancel: Some(stop),
+        };
+        let mut seed = 7u64;
+        let b = random_nnf(&mut seed, 6, 4);
+        // Stopped before it began: the tier-1 form, or no form, never a wrong one.
+        let s = simplify_bool(&b, &limits);
+        assert!(s.is_ok() || s.is_err_and(|e| !e.contains("internal")));
     }
 }

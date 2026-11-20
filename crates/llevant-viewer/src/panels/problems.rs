@@ -20,9 +20,6 @@ use crate::{icons, theme};
 #[derive(Default)]
 pub struct ProblemsPanel {
     pub region: RegionPicker,
-    /// Cut cells out of each other as `A #B`, without shortening the
-    /// geometry by Boolean algebra.
-    pub plain_cuts: bool,
 }
 
 /// Go to a problem: frame `b` (or a box around `p`), slice through `p`,
@@ -70,7 +67,6 @@ fn problem_row(
     k: usize,
     l: &Label,
     volume: Option<(String, String)>,
-    simplify: bool,
     out: &mut Vec<Command>,
 ) -> bool {
     let m = &doc.model;
@@ -134,21 +130,18 @@ fn problem_row(
                 let (a, b) = (m.cell_id(l.involved[0]), m.cell_id(l.involved[1]));
                 ui.horizontal_wrapped(|ui| {
                     for (keep, cut) in [(a, b), (b, a)] {
-                        let open = doc.cut_preview.as_ref().is_some_and(|p| {
-                            p.is(keep, cut, simplify) && p.is_of(doc.source.as_ref())
-                        });
+                        let open = doc
+                            .cut_flow
+                            .as_ref()
+                            .is_some_and(|f| f.is(keep, cut) && f.is_of(doc.source.as_ref()));
                         let r = ui
                             .selectable_label(open, format!("{} #{cut} from {keep}", icons::CLIP))
                             .on_hover_text("Click to preview the cut in the inspector");
                         if r.clicked() {
                             out.push(if open {
-                                Command::CancelCutPreview
+                                Command::CancelCutFlow
                             } else {
-                                Command::PreviewCut {
-                                    keep,
-                                    cut,
-                                    simplify,
-                                }
+                                Command::PreviewCut { keep, cut }
                             });
                         }
                     }
@@ -184,12 +177,6 @@ impl ProblemsPanel {
                     ));
                 }
             }
-            ui.checkbox(&mut self.plain_cuts, "Plain cuts (no simplification)")
-                .on_hover_text(
-                    "An overlap can be fixed by cutting one cell out of the other. By default \
-                     the geometry written is shortened with the laws of Boolean algebra only \
-                     (proven equal to the plain A #B, whatever the surfaces are).",
-                );
             let Some(run) = &doc.results.check else {
                 return;
             };
@@ -210,7 +197,7 @@ impl ProblemsPanel {
                 let (l, vol) = (&v.labels[i], &v.volumes[i]);
                 let volume = format!("{:.2e} cm³", vol.estimate);
                 let sigma = format!("± {:.1e} cm³ (one standard deviation)", vol.sigma);
-                if problem_row(ui, doc, k, l, Some((volume, sigma)), !self.plain_cuts, out) {
+                if problem_row(ui, doc, k, l, Some((volume, sigma)), out) {
                     out.extend(go(doc, l, Some(vol.bbox), vol.bbox.center()));
                 }
             }
@@ -230,7 +217,7 @@ impl ProblemsPanel {
                 return;
             }
             for (k, (l, p)) in seen.iter().enumerate() {
-                if problem_row(ui, doc, k, l, None, !self.plain_cuts, out) {
+                if problem_row(ui, doc, k, l, None, out) {
                     out.extend(go(doc, l, None, *p));
                 }
             }

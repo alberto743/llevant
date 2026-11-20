@@ -37,15 +37,45 @@ impl ViewerApp {
         });
     }
 
-    /// Cell `cut` taken out of cell `keep` (an overlap fixed), as one edit
-    /// (one Undo); both cells then selected.
-    pub(super) fn cut_cell(&mut self, keep: i64, cut: i64, simplify: bool, ctx: &egui::Context) {
-        let what = format!("cell {keep} cut by #{cut}");
-        let select = Query::Cells(vec![keep, cut]);
+    /// The cut proposed written (`#cut` expanded), as one edit (one Undo);
+    /// both cells then selected. The cut stays open in the inspector, which
+    /// says whether the check of what changed found the overlap solved.
+    pub(super) fn cut_apply(
+        &mut self,
+        plan: llevant_scene::source::CutExpand,
+        ctx: &egui::Context,
+    ) {
+        let what = format!("cell {} cut by #{}", plan.keep, plan.cut);
+        let select = Query::Cells(vec![plan.keep, plan.cut]);
+        if let Some(f) = self.doc.as_mut().and_then(|d| d.cut_flow.as_mut()) {
+            f.phase = crate::cutflow::Phase::Applying(plan.clone());
+        }
         let said = what.clone();
         self.start_change(ctx, what, Some(select), move |source| {
-            let plan = source.cut_plan(keep, cut, simplify)?;
-            let mut change = input_edits::Change::one(keep, source.apply_cut(&plan)?);
+            let mut change = input_edits::Change::one(plan.keep, source.apply_expand(&plan)?);
+            change.what = said;
+            Ok(change)
+        });
+        // Not started (an edit is under way, or refused): the cut is closed,
+        // and what was said is in the messages.
+        if self.loading.is_none() {
+            if let Some(d) = &mut self.doc {
+                d.cut_flow = None;
+            }
+        }
+    }
+
+    /// The simplification shown written, as one edit (one Undo); the cut is
+    /// closed.
+    pub(super) fn cut_accept(&mut self, s: llevant_scene::source::Simplified, ctx: &egui::Context) {
+        if let Some(d) = &mut self.doc {
+            d.cut_flow = None;
+        }
+        let what = format!("cell {} simplified", s.keep);
+        let select = Query::Cells(vec![s.keep]);
+        let said = what.clone();
+        self.start_change(ctx, what, Some(select), move |source| {
+            let mut change = input_edits::Change::one(s.keep, source.apply_simplified(&s)?);
             change.what = said;
             Ok(change)
         });

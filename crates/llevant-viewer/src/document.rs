@@ -139,8 +139,8 @@ pub struct Document {
     pub focus: Option<Picked>,
     /// The surface picked with Alt+click, marked in both views.
     pub surface_pick: Option<SurfacePick>,
-    /// The overlap cut previewed in the inspector (and not applied).
-    pub cut_preview: Option<crate::cutpreview::CutPreview>,
+    /// The overlap cut under way, shown in the inspector.
+    pub cut_flow: Option<crate::cutflow::CutFlow>,
     /// What the pointer is over.
     pub pointer: Pointer,
     /// What the tools are editing.
@@ -642,7 +642,7 @@ impl Document {
             history: History::default(),
             focus: None,
             surface_pick: None,
-            cut_preview: None,
+            cut_flow: None,
             pointer: Pointer {
                 hover: None,
                 hover_key: None,
@@ -799,6 +799,7 @@ impl Document {
         new.whole = self.whole.take();
         new.input_meshes = self.input_meshes.take();
         new.input = self.input.take();
+        new.cut_flow = self.cut_flow.take();
         new.slice_in_3d = self.slice_in_3d;
         new.cut_at_slice = self.cut_at_slice;
         new.show_cuts = self.show_cuts;
@@ -1215,9 +1216,12 @@ impl Document {
             | Command::OpenDialog
             | Command::Reload
             | Command::EditCard(..)
-            | Command::CutCell { .. }
             | Command::PreviewCut { .. }
-            | Command::CancelCutPreview
+            | Command::CutApply(_)
+            | Command::CutSimplify
+            | Command::CutAccept(_)
+            | Command::RevertCut
+            | Command::CancelCutFlow
             | Command::EditCells(..)
             | Command::Renumber(..)
             | Command::EditSelection

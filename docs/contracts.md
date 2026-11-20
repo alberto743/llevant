@@ -71,6 +71,19 @@ in the warnings. `apply_cut` refuses a plan made when `keep`'s card was not as i
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
 keeps its cell, and the simplified and plain cuts label every point alike.
 
+The viewer cuts in two steps, each its own edit. `Source::cut_expand` writes `A` with
+`#B` replaced by the complement of cell B (De Morgan only, so it costs a visit of B's
+geometry at any size); it is proven equal to `A ∩ ¬B` with BDDs, and `empty` is set when
+nothing is left (`source/cut.rs` tests). `Source::cell_simplify` shortens the geometry as
+it is then: `simplify_bool` tries a tree pass first (`source/algebra/tree.rs`: a literal
+known from the products and sums around it is replaced by 0 or 1, `x·¬x = 0`, absorption;
+a random test of 400 expressions checks that each result is the same function and not
+longer), then the disjunctive-normal-form path only for what has at most 256 products,
+under a time limit and a cancel flag (`Limits`). The shortest form is given only when
+the BDDs prove it equal; the proof or the limits failing gives no form. A cut of 14 groups
+by 16 planes, which took seconds in the normal-form path, is done at once (`algebra.rs`
+tests). `apply_card` refuses a plan made when the card was not as it is now.
+
 ## Editing the input
 
 `llevant_scene::source::Source` keeps an input's migjorn tree and changes one card of

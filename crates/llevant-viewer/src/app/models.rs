@@ -302,6 +302,11 @@ impl ViewerApp {
                 if what.is_some() {
                     doc.source = self.source.clone();
                     doc.input_meshes = self.input_meshes.clone();
+                    // A cut written: the check of what it changed is next.
+                    let check = crate::cutflow::check_id(doc);
+                    if let Some(f) = &mut doc.cut_flow {
+                        f.written(doc.source.as_ref(), check);
+                    }
                 }
                 let mut message = reloaded_message(doc, changed.as_ref(), seconds);
                 if let Some(w) = what {
@@ -338,6 +343,9 @@ impl ViewerApp {
                     self.panels.inspector.edit_failed(&e.to_string());
                 }
                 if let Some(d) = &mut self.doc {
+                    if editing {
+                        d.cut_flow = None;
+                    }
                     d.messages.warn(if editing {
                         format!("could not edit: {e}")
                     } else {

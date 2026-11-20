@@ -21,7 +21,8 @@ pub mod algebra;
 mod cut;
 mod fields;
 mod many;
-pub use cut::CutPlan;
+pub use algebra::Limits;
+pub use cut::{CutExpand, CutPlan, Simplified};
 pub use fields::{
     coefficient_names, general_forms, geometry_words, wrap_long_lines, CellChange, CellFields,
     Entry, Flag, MaterialFields, Param, Spanned, Word,

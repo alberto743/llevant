@@ -36,3 +36,22 @@ would be cut too) and cells in different universes (as their `u=` say); a `cut` 
 `TRCL` is written plain. A cell that writes `#keep` takes in what is cut: it is named in
 the warnings, not changed. A geometry rewritten, plain or simplified, loses comments
 inside it.
+
+## Amendment, 2026-11-20: two steps, and a cheap first tier
+
+Measured (`cut_expr` stages, A with m groups of two literals, B with n planes): the
+normal-form path grew about 16 times for every two groups, 5 ms at 6 groups, 1.5 s at 10
+and 26 s at 12 (4096 products), 95% of it in the redundancy test and the normal form, the
+BDD proof under 6 ms, and the result was often no shorter. So:
+
+- The viewer cuts in two edits: `cut_expand` writes `A` with `#B` expanded (De Morgan only),
+  the check of what changed says whether the overlap is solved, and `cell_simplify` is a
+  button, in the background, shown as a `diff -u`, accepted or discarded. Discarding keeps
+  the expanded cut; Revert takes the whole cut back. "Plain cuts" is gone (the python
+  `Deck.cut_plan` keeps `simplify=False`).
+- `simplify_bool` tries a tree pass first (GEOUNED's idea in `BoolSequence.simplify`:
+  a literal known from the products and sums around it is a constant below; no normal form),
+  then the old path only for at most 256 products and under `Limits` (time, cancel).
+  GEOUNED proves nothing; here the BDD proof stays, and the result is given only with it.
+- The BDD variable order was not the problem (it is the order of first appearance).
+

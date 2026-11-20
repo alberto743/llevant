@@ -28,7 +28,7 @@ pub mod app;
 pub mod camera;
 pub mod command;
 pub mod context;
-pub mod cutpreview;
+pub mod cutflow;
 pub mod cuts;
 pub mod derive;
 pub mod document;

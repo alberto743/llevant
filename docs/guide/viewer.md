@@ -136,19 +136,31 @@ largest first; its arrow takes you to it. **Problem display** draws them on top 
 everything in 3D.
 
 An overlap of two cells has two buttons under its row, **✂ #B from A** and
-**✂ #A from B**: the first cuts cell B out of cell A, which adds `#B` to A's geometry
-so that the two no longer overlap. Clicking a button opens a preview in the inspector,
-planned in the background (the viewer stays responsive): the card before and after,
-what Apply removes in red and what it adds in green, with
-**Apply** and **Cancel**; nothing is written until Apply. By
-default the geometry written is shortened with the laws of Boolean algebra alone
-(De Morgan, distributivity, `x·¬x = 0`, absorption, consensus), which is proven equal
-to the plain `A #B` whatever the surfaces are; tick **Plain cuts** to write `A #B`
-as it is. The edit is one Undo and is not saved until you save the input. A cell with
-a `TRCL`, a `LIKE` cell, a cell that a `LIKE` cell copies and cells in different
-universes are refused, and cutting a cell out of one that lies inside it is refused
-(nothing would be left). The tooltip names the cells that write `#A`: they then take in
-the part of B that is cut out of A, which may make a new overlap.
+**✂ #A from B**: the first cuts cell B out of cell A, so that the two no longer overlap.
+It goes in steps in the inspector, and nothing is written without a button:
+
+1. The inspector shows cell A's geometry with `#B` added, highlighted in yellow.
+   **Apply** or **Cancel**.
+2. After Apply, `#B` is written as what it stands for, the complement of cell B's
+   geometry (the expansion is highlighted in yellow). It is cheap at any size, and exact.
+3. The check of what changed runs, and the inspector says whether the overlap is
+   **solved** (and names the other cells the cell still overlaps, if any) or **remains**.
+   If it remains, **Revert** closes the cut and puts the cell back as it was. If it is
+   solved you can **Simplify**, **Revert** or keep it (**Keep it**).
+4. **Simplify** shortens the geometry with the laws of Boolean algebra, in the
+   background (it stops after 20 s, and **Cancel** stops it at once). The result is
+   proven equal to the geometry as it is, whatever the surfaces are. It is shown as
+   a `diff -u` of the card: the lines removed in red, those added in green, the words
+   that changed marked.
+5. **Accept** writes it (a second edit with its own Undo); **Discard** keeps the geometry
+   as it is after step 2. The inspector then goes back to what it was showing.
+
+Each edit is one Undo and is not saved until you save the input. A cell with a `TRCL`, a
+`LIKE` cell, a cell that a `LIKE` cell copies and cells in different universes are refused,
+a cut cell with a `TRCL` is written as `#B` as it is, and cutting a cell out of one that
+lies inside it is refused (nothing would be left). The inspector names the cells that
+write `#A`: they then take in the part of B that is cut out of A, which may make a new
+overlap.
 
 ![The Check workspace: two overlaps found in the slice, hatched in magenta](../img/viewer-check.png)
 

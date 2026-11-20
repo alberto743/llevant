@@ -1183,17 +1183,10 @@ fn edit_time_in_a_universe_on_the_big_model() {
     );
 }
 
-/// An overlap fixed from the Problems panel's command: cell 2 cut out of by
-/// cell 1 (shortened by Boolean algebra), one Undo, and a cut that cannot be
-/// made (a cell inside the other) changes nothing.
-#[test]
-fn an_overlap_fixed_by_cutting_a_cell() {
-    if !adapter_available() {
-        eprintln!("skipped: no GPU adapter");
-        return;
-    }
-    let _one = serial();
-    let dir = std::env::temp_dir().join(format!("llevant-viewer-cut-{}", std::process::id()));
+/// A harness on a small model with an overlap: cells 2 and 3 share the part
+/// of cell 3 (`-1 3`) inside cell 2.
+fn overlap_harness(tag: &str) -> (Harness<'static, ViewerApp>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("llevant-viewer-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("overlap.i");
     let text = "overlap\n1 0 -1 imp:n=1\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\
@@ -1205,211 +1198,222 @@ fn an_overlap_fixed_by_cutting_a_cell() {
         .wgpu_setup(llevant_viewer::app::wgpu_options().wgpu_setup)
         .build_eframe(|cc| ViewerApp::empty(cc).unwrap());
     let ctx = h.ctx.clone();
-    h.state_mut().open_file(path.clone(), &ctx);
+    h.state_mut().open_file(path, &ctx);
     step_until(&mut h, "the model and its cards", |a| {
         a.document()
             .is_some_and(|d| d.model.is_complete() && d.source.is_some())
             && !a.is_loading()
     });
-    let card = |h: &Harness<'_, ViewerApp>, id: i64| {
-        let d = h.state().document().unwrap();
-        d.source.as_ref().unwrap().cell(id).unwrap().text.clone()
-    };
-    let send = |h: &mut Harness<'_, ViewerApp>, c: Command| {
-        step_until(h, "the jobs before", |a| {
-            a.document().is_none_or(|d| d.results.jobs.is_empty())
-        });
-        let ctx = h.ctx.clone();
-        h.state_mut().send(c, &ctx);
-        h.step();
-        step_until(h, "the edit to compile", |a| !a.is_loading());
-        last_said(h.state().document().unwrap())
-    };
-    let before = card(&h, 2);
-    let msg = send(
-        &mut h,
-        Command::CutCell {
-            keep: 2,
-            cut: 3,
-            simplify: true,
-        },
-    );
-    assert!(msg.contains("cell 2 cut by #3"), "{msg}");
-    assert_eq!(h.state().input_edits(), (1, true));
-    // (-2:-4) 3 outside -1 3 is 3 1 (-2:-4): no shorter than the plain cut,
-    // which is kept.
-    assert_eq!(card(&h, 2).trim_end(), "2 0 (-2:-4) 3 #3 imp:n=1");
-    assert_eq!(
-        card(&h, 3).trim_end(),
-        "3 0 -1 3 imp:n=1",
-        "the other cell is as it was"
-    );
-    send(&mut h, Command::UndoInputEdit);
-    assert_eq!(h.state().input_edits(), (0, false));
-    assert_eq!(card(&h, 2), before);
+    (h, dir)
+}
 
-    // Cell 3 lies inside cell 1: cutting it out of cell 3 leaves nothing.
-    let msg = send(
-        &mut h,
-        Command::CutCell {
-            keep: 3,
-            cut: 1,
-            simplify: true,
+fn cell_card(h: &Harness<'_, ViewerApp>, id: i64) -> String {
+    let d = h.state().document().unwrap();
+    d.source.as_ref().unwrap().cell(id).unwrap().text.clone()
+}
+
+fn send_cmd(h: &mut Harness<'_, ViewerApp>, c: Command) {
+    let ctx = h.ctx.clone();
+    h.state_mut().send(c, &ctx);
+    h.run_steps(3);
+}
+
+fn flow_phase(h: &Harness<'_, ViewerApp>) -> &'static str {
+    use llevant_viewer::cutflow::Phase;
+    match h.state().document().and_then(|d| d.cut_flow.as_ref()) {
+        None => "none",
+        Some(f) => match &f.phase {
+            Phase::Planning(_) => "planning",
+            Phase::Applying(_) => "applying",
+            Phase::Verifying { .. } => "verifying",
+            Phase::Simplifying { .. } => "simplifying",
         },
-    );
-    assert!(msg.contains("inside"), "{msg}");
+    }
+}
+
+/// Step 1 of a cut: proposed in the inspector, `#3` shown on cell 2, and
+/// nothing written; Cancel closes it.
+fn propose(h: &mut Harness<'_, ViewerApp>) {
+    send_cmd(h, Command::PreviewCut { keep: 2, cut: 3 });
+    step_until(h, "the plan", |a| {
+        a.document()
+            .and_then(|d| d.cut_flow.as_ref())
+            .is_some_and(|f| match &f.phase {
+                llevant_viewer::cutflow::Phase::Planning(s) => {
+                    llevant_viewer::cutflow::read(s, |r| r.is_some())
+                }
+                _ => false,
+            })
+    });
+    h.run_steps(3);
+}
+
+/// Apply it and wait until the cut is written and its check has run.
+fn apply_and_verify(h: &mut Harness<'_, ViewerApp>) {
+    h.get_by_label("Apply").click();
+    step_until(h, "the cut", |a| {
+        a.input_edits() == (1, true)
+            && !a.is_loading()
+            && a.document().is_some_and(|d| d.results.jobs.is_empty())
+    });
+    h.run_steps(4);
+}
+
+#[test]
+fn a_cut_is_proposed_applied_verified_and_simplified() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, dir) = overlap_harness("cutflow");
+    let before = cell_card(&h, 2);
+
+    // 1. Proposed: cell 2 with `#3`, nothing written; Cancel closes it.
+    propose(&mut h);
+    h.get_by_label_contains("Cut #3 from cell 2");
+    h.get_by_label_contains("with #B added");
     assert_eq!(h.state().input_edits(), (0, false));
+    assert_eq!(cell_card(&h, 2), before);
+    if let Some(png) = std::env::var_os("LLEVANT_VIEWER_TEST_PNG") {
+        save(&mut h, &PathBuf::from(png).with_extension("step1.png"));
+    }
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(flow_phase(&h), "none");
+    assert!(h.query_by_label_contains("Cut #3 from cell 2").is_none());
+
+    // 2-3. Applied: `#3` written as what it stands for, and the check says
+    // the overlap is solved.
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    let written = cell_card(&h, 2);
+    assert!(
+        written.contains("(1:-3)") && !written.contains("#3"),
+        "{written}"
+    );
+    assert_eq!(flow_phase(&h), "verifying");
+    h.get_by_label_contains("Overlap solved");
+    if let Some(png) = std::env::var_os("LLEVANT_VIEWER_TEST_PNG") {
+        save(&mut h, &PathBuf::from(png).with_extension("step3.png"));
+    }
+
+    // 4-5. Simplify: shown as a diff, proven; Accept writes it (a second edit).
+    h.get_by_label("Simplify").click();
+    step_until(&mut h, "the simplification", |a| {
+        a.document()
+            .and_then(|d| d.cut_flow.as_ref())
+            .is_some_and(|f| match &f.phase {
+                llevant_viewer::cutflow::Phase::Simplifying { slot, .. } => {
+                    llevant_viewer::cutflow::read(slot, |r| r.is_some())
+                }
+                _ => false,
+            })
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("--- cell 2");
+    h.get_by_label_contains("+++ cell 2");
+    if let Some(png) = std::env::var_os("LLEVANT_VIEWER_TEST_PNG") {
+        save(&mut h, &PathBuf::from(png).with_extension("step6.png"));
+    }
+    h.get_by_label("Accept").click();
+    step_until(&mut h, "the accepted edit", |a| {
+        a.input_edits() == (2, true) && !a.is_loading()
+    });
+    h.run_steps(3);
+    let simple = cell_card(&h, 2);
+    assert!(!simple.contains("(1:-3)"), "{simple}");
+    // 8. Back to the original state.
+    assert_eq!(flow_phase(&h), "none");
+    // Two Undos take both edits back.
+    send_cmd(&mut h, Command::UndoInputEdit);
+    step_until(&mut h, "the undo", |a| {
+        a.input_edits().0 == 1 && !a.is_loading()
+    });
+    send_cmd(&mut h, Command::UndoInputEdit);
+    step_until(&mut h, "the undo", |a| {
+        a.input_edits().0 == 0 && !a.is_loading()
+    });
+    assert_eq!(cell_card(&h, 2), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An overlap cut previewed in the inspector (not in the Problems panel):
-/// planned in the background, nothing written until Apply; Cancel, a cut that
-/// cannot be made, a stale preview and Apply, and the buttons of the Problems
-/// panel that open and close it.
 #[test]
-fn a_cut_is_previewed_in_the_inspector() {
+fn a_cut_is_reverted_or_its_simplification_discarded() {
     if !adapter_available() {
         eprintln!("skipped: no GPU adapter");
         return;
     }
     let _one = serial();
-    let dir = std::env::temp_dir().join(format!("llevant-viewer-cutview-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("overlap.i");
-    let text = "overlap\n1 0 -1 imp:n=1\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\
-                4 0 1 -5 imp:n=0\n5 0 5 imp:n=0\n\n\
-                1 so 5\n2 sx 4 5\n3 px 0\n4 so 9\n5 so 50\n\n";
-    std::fs::write(&path, text).unwrap();
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1400.0, 1300.0))
-        .wgpu_setup(llevant_viewer::app::wgpu_options().wgpu_setup)
-        .build_eframe(|cc| ViewerApp::empty(cc).unwrap());
-    let ctx = h.ctx.clone();
-    h.state_mut().open_file(path.clone(), &ctx);
-    step_until(&mut h, "the model and its cards", |a| {
-        a.document()
-            .is_some_and(|d| d.model.is_complete() && d.source.is_some())
-            && !a.is_loading()
+    let (mut h, dir) = overlap_harness("cutflow2");
+    let before = cell_card(&h, 2);
+
+    // Revert: the cell as it was, and the inspector back to its state.
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    h.get_by_label("Revert").click();
+    step_until(&mut h, "the revert", |a| {
+        a.input_edits().0 == 0 && !a.is_loading()
     });
-    let card = |h: &Harness<'_, ViewerApp>, id: i64| {
-        let d = h.state().document().unwrap();
-        d.source.as_ref().unwrap().cell(id).unwrap().text.clone()
-    };
-    let preview = |h: &mut Harness<'_, ViewerApp>, keep: i64, cut: i64| {
-        let ctx = h.ctx.clone();
-        h.state_mut().send(
-            Command::PreviewCut {
-                keep,
-                cut,
-                simplify: true,
-            },
-            &ctx,
-        );
-        step_until(h, "the plan", |a| {
-            a.document()
-                .and_then(|d| d.cut_preview.as_ref())
-                .is_some_and(|p| p.with_plan(|p| p.is_some()))
-        });
-        h.run_steps(3);
-    };
-    let open = |h: &Harness<'_, ViewerApp>| h.state().document().unwrap().cut_preview.is_some();
-    let before = card(&h, 2);
-
-    // Previewed: shown in the inspector, nothing written.
-    preview(&mut h, 2, 3);
-    h.get_by_label_contains("Cut #3 from cell 2");
-    assert!(h
-        .query_by_label("Apply")
-        .is_some_and(|a| !a.accesskit_node().is_disabled()));
-    assert_eq!(h.state().input_edits(), (0, false));
-    assert_eq!(card(&h, 2), before);
-    if let Some(png) = std::env::var_os("LLEVANT_VIEWER_TEST_PNG") {
-        save(&mut h, &PathBuf::from(png).with_extension("cutview.png"));
-    }
-
-    // Cancel closes it.
-    h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert!(!open(&h));
-    assert!(h.query_by_label_contains("Cut #3 from cell 2").is_none());
+    assert_eq!(cell_card(&h, 2), before);
+    assert_eq!(flow_phase(&h), "none");
 
-    // A cut that leaves nothing: said, and Apply waits.
-    preview(&mut h, 3, 1);
-    h.get_by_label_contains("lies inside cell 1");
-    assert!(h
-        .query_by_label("Apply")
-        .is_none_or(|a| a.accesskit_node().is_disabled()));
-    h.get_by_label("Cancel").click();
+    // Discard the simplification: the expanded cut stays.
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    let written = cell_card(&h, 2);
+    h.get_by_label("Simplify").click();
+    step_until(&mut h, "the simplification", |a| {
+        a.document()
+            .and_then(|d| d.cut_flow.as_ref())
+            .is_some_and(|f| match &f.phase {
+                llevant_viewer::cutflow::Phase::Simplifying { slot, .. } => {
+                    llevant_viewer::cutflow::read(slot, |r| r.is_some())
+                }
+                _ => false,
+            })
+    });
+    h.run_steps(4);
+    h.get_by_label("Discard simplification").click();
     h.run_steps(3);
+    assert_eq!(flow_phase(&h), "none");
+    assert_eq!(h.state().input_edits(), (1, true));
+    assert_eq!(cell_card(&h, 2), written);
 
-    // A preview of an input since changed is no longer shown.
-    preview(&mut h, 2, 3);
-    let ctx = h.ctx.clone();
-    let text4 = card(&h, 4);
-    h.state_mut().send(
+    // A cut whose input changes meanwhile is closed.
+    send_cmd(&mut h, Command::UndoInputEdit);
+    step_until(&mut h, "the undo", |a| {
+        a.input_edits().0 == 0 && !a.is_loading()
+    });
+    propose(&mut h);
+    let text4 = cell_card(&h, 4);
+    send_cmd(
+        &mut h,
         Command::EditCard(
             llevant_scene::source::CardKind::Cell,
             4,
             format!("{} $ edited", text4.trim_end()),
         ),
-        &ctx,
     );
     step_until(&mut h, "the edit", |a| {
         a.input_edits() == (1, true) && !a.is_loading()
     });
-    h.run_steps(3);
-    assert!(h.query_by_label_contains("Cut #3 from cell 2").is_none());
-    h.state_mut().send(Command::UndoInputEdit, &ctx);
-    step_until(&mut h, "the undo", |a| {
-        a.input_edits() == (0, false) && !a.is_loading()
-    });
-    assert!(!open(&h) || h.query_by_label_contains("Cut #3 from cell 2").is_none());
-
-    // Apply writes it (one Undo), and closes the preview.
-    preview(&mut h, 2, 3);
-    h.get_by_label("Apply").click();
-    step_until(&mut h, "the cut", |a| {
-        a.input_edits() == (1, true) && !a.is_loading()
-    });
-    h.run_steps(3);
-    assert!(card(&h, 2).contains("#3"), "{}", card(&h, 2));
-    assert_eq!(h.state().input_edits(), (1, true));
-    assert!(!open(&h));
-    h.state_mut().send(Command::UndoInputEdit, &ctx);
-    step_until(&mut h, "the undo", |a| {
-        a.input_edits() == (0, false) && !a.is_loading()
-    });
-    assert_eq!(card(&h, 2), before);
+    h.run_steps(4);
+    assert_eq!(flow_phase(&h), "none", "a stale cut is closed");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The cut buttons of an overlap in the Problems panel open the preview in
-/// the inspector, and a second click closes it.
+/// The cut buttons of an overlap in the Problems panel open the cut in the
+/// inspector, and a second click closes it.
 #[test]
-fn the_cut_buttons_open_and_close_the_preview() {
+fn the_cut_buttons_open_and_close_the_cut() {
     if !adapter_available() {
         eprintln!("skipped: no GPU adapter");
         return;
     }
     let _one = serial();
-    let dir = std::env::temp_dir().join(format!("llevant-viewer-cutbtn-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("overlap.i");
-    let text = "overlap\n1 0 -1 imp:n=1\n2 0 (-2:-4) 3 imp:n=1\n3 0 -1 3 imp:n=1\n\
-                4 0 1 -5 imp:n=0\n5 0 5 imp:n=0\n\n\
-                1 so 5\n2 sx 4 5\n3 px 0\n4 so 9\n5 so 50\n\n";
-    std::fs::write(&path, text).unwrap();
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1400.0, 1300.0))
-        .wgpu_setup(llevant_viewer::app::wgpu_options().wgpu_setup)
-        .build_eframe(|cc| ViewerApp::empty(cc).unwrap());
-    let ctx = h.ctx.clone();
-    h.state_mut().open_file(path.clone(), &ctx);
-    step_until(&mut h, "the model and its cards", |a| {
-        a.document()
-            .is_some_and(|d| d.model.is_complete() && d.source.is_some())
-            && !a.is_loading()
-    });
+    let (mut h, dir) = overlap_harness("cutbtn");
     panel(&mut h, Panel::Problems);
     h.run_steps(2);
     h.get_all_by_label("the problem").next().unwrap().click();
@@ -1419,8 +1423,16 @@ fn the_cut_buttons_open_and_close_the_preview() {
         a.document().unwrap().results.check.is_some()
     });
     h.run_steps(3);
-    let open = |h: &Harness<'_, ViewerApp>| h.state().document().unwrap().cut_preview.is_some();
-    assert!(!open(&h));
+    assert_eq!(flow_phase(&h), "none");
+    let button = |h: &Harness<'_, ViewerApp>| {
+        h.get_all_by_label_contains(icons::CLIP)
+            .find(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|l| l.contains(" from "))
+            })
+            .map(|n| n.rect())
+    };
     h.get_all_by_label_contains(icons::CLIP)
         .find(|n| {
             n.accesskit_node()
@@ -1429,11 +1441,12 @@ fn the_cut_buttons_open_and_close_the_preview() {
         })
         .expect("a cut button")
         .click();
-    step_until(&mut h, "the preview", |a| {
-        a.document().is_some_and(|d| d.cut_preview.is_some())
+    step_until(&mut h, "the plan", |a| {
+        a.document().is_some_and(|d| d.cut_flow.is_some())
     });
     h.run_steps(3);
     h.get_by_label_contains("Cut #");
+    assert!(button(&h).is_some());
     h.get_all_by_label_contains(icons::CLIP)
         .find(|n| {
             n.accesskit_node()
@@ -1443,6 +1456,6 @@ fn the_cut_buttons_open_and_close_the_preview() {
         .expect("the button again")
         .click();
     h.run_steps(3);
-    assert!(!open(&h), "a second click closes it");
+    assert_eq!(flow_phase(&h), "none", "a second click closes it");
     let _ = std::fs::remove_dir_all(&dir);
 }
