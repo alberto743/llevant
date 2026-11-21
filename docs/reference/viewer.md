@@ -105,7 +105,8 @@ Discard.
   With as many terms as before, only
   the terms changed are written and the card's line breaks stay; otherwise the
   geometry is written again, broken into continuation lines where a line would pass
-  128 columns.
+  128 columns (between terms, or at the `:` of a union; a `$` comment is kept, as
+  comment lines after the card if it does not fit).
 - a material: its nuclides grouped by element, each fraction a field; atoms ↔ mass
   (written again as fractions summing to 1; masses from the mass formula for
   nuclides, within 0.12 %, and standard atomic weights for natural elements);

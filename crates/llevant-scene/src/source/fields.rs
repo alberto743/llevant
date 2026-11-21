@@ -660,14 +660,84 @@ fn geometry_terms(text: &str) -> Option<Vec<String>> {
 /// Lines are broken this far in (columns), under [`super::MAX_COLUMNS`].
 const BREAK_AT: usize = 100;
 
-/// A card with each line over [`super::MAX_COLUMNS`] broken (before its
-/// `$` comment, at a space) into continuation lines of five spaces.
-/// Comment lines are left as they are.
+/// Columns of `s` (characters, not bytes).
+fn width(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// The pieces a line's code can be broken between: its words, and inside a
+/// word of geometry alone (digits, signs, `.`, `:`, `(`, `)`, `#`) before
+/// each `:` and `)` and after each `(`, as MCNP reads a line break as a
+/// blank. Each piece says whether a blank comes before it.
+fn pieces(code: &str) -> Vec<(&str, bool)> {
+    let mut out = Vec::new();
+    for word in code.split_whitespace() {
+        let geometry = word.chars().all(|c| "0123456789+-.:()#".contains(c));
+        let mut start = 0;
+        let mut blank = true;
+        if geometry {
+            for (k, c) in word.char_indices() {
+                let before = matches!(c, ':' | ')') && k > start;
+                let after = c == '(' && k + 1 < word.len();
+                if before {
+                    out.push((&word[start..k], blank));
+                    (start, blank) = (k, false);
+                }
+                if after {
+                    out.push((&word[start..=k], blank));
+                    (start, blank) = (k + 1, false);
+                }
+            }
+        }
+        out.push((&word[start..], blank));
+    }
+    out
+}
+
+/// `note` (a `$` comment) as comment lines, each within
+/// [`super::MAX_COLUMNS`], broken at blanks where it can be.
+fn comment_lines(note: &str, newline: &str) -> String {
+    let text = note.trim_start_matches('$').trim();
+    let room = super::MAX_COLUMNS - 2;
+    let mut out = String::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_string();
+        while width(&word) > room {
+            let head: String = word.chars().take(room).collect();
+            word = word.chars().skip(room).collect();
+            if !line.is_empty() {
+                out += &format!("c {line}{newline}");
+                line.clear();
+            }
+            out += &format!("c {head}{newline}");
+        }
+        if !line.is_empty() && width(&line) + 1 + width(&word) > room {
+            out += &format!("c {line}{newline}");
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line += &word;
+    }
+    if !line.is_empty() || out.is_empty() {
+        out += &format!("c {line}{newline}");
+    }
+    out
+}
+
+/// A card with each line over [`super::MAX_COLUMNS`] broken into
+/// continuation lines of five spaces: between words, or inside a word of
+/// geometry at a `:` or a parenthesis (so a union printed without blanks
+/// breaks too), never inside a number or a keyword; widths in characters.
+/// A `$` comment stays at the end of the last line, with a word moved to a
+/// line of its own if that makes room, else it becomes comment lines after
+/// the card. Lines within the columns, and comment lines, are left as they
+/// are; a word longer than a line is left whole.
 pub fn wrap_long_lines(card: &str) -> String {
-    if card
-        .lines()
-        .all(|l| l.chars().count() <= super::MAX_COLUMNS)
-    {
+    let max = super::MAX_COLUMNS;
+    if card.lines().all(|l| width(l) <= max) {
         return card.to_string();
     }
     let mut out = String::new();
@@ -686,7 +756,7 @@ pub fn wrap_long_lines(card: &str) -> String {
                 && (t.eq_ignore_ascii_case("c")
                     || (t.starts_with(['c', 'C']) && t[1..].starts_with([' ', '\t'])))
         };
-        if body.chars().count() <= super::MAX_COLUMNS || comment || !body.is_ascii() {
+        if width(body) <= max || comment {
             out.push_str(line);
             continue;
         }
@@ -695,31 +765,64 @@ pub fn wrap_long_lines(card: &str) -> String {
             Some(k) => body.split_at(k),
             None => (body, ""),
         };
-        let mut rest = code.trim_end();
-        let mut first = true;
-        while rest.len() > BREAK_AT {
-            let cut = rest[..BREAK_AT]
-                .rfind(' ')
-                .filter(|&c| c > 5)
-                .unwrap_or(BREAK_AT);
-            let (a, b) = rest.split_at(cut);
-            if !first {
-                out.push_str("     ");
+        let note = note.trim_end();
+        let lead = &code[..code.len() - code.trim_start().len()];
+        // Pieces packed into lines of at most `BREAK_AT` columns.
+        let mut lines: Vec<Vec<(&str, bool)>> = vec![Vec::new()];
+        let mut used = width(lead);
+        for (piece, blank) in pieces(code) {
+            let cur = lines.last_mut().expect("one line");
+            let add = width(piece) + usize::from(blank && !cur.is_empty());
+            if !cur.is_empty() && used + add > BREAK_AT {
+                lines.push(vec![(piece, blank)]);
+                used = 5 + width(piece);
+            } else {
+                cur.push((piece, blank));
+                used += add;
             }
-            out.push_str(a.trim_end());
-            out.push_str(newline);
-            rest = b.trim_start();
-            first = false;
         }
-        if !first {
-            out.push_str("     ");
-        }
-        out.push_str(rest);
+        let text = |k: usize, l: &[(&str, bool)]| {
+            let mut s = String::from(if k == 0 { lead } else { "     " });
+            for (j, (p, blank)) in l.iter().enumerate() {
+                if *blank && j > 0 {
+                    s.push(' ');
+                }
+                s.push_str(p);
+            }
+            s
+        };
+        // Room for the comment on the last line, or on a line of its own
+        // with the last piece.
+        let mut after = String::new();
         if !note.is_empty() {
-            out.push(' ');
-            out.push_str(note);
+            let k = lines.len() - 1;
+            let fits = |s: &str| width(s) + 1 + width(note) <= max;
+            if !fits(&text(k, &lines[k])) {
+                let moved = (lines[k].len() > 1).then(|| lines[k].pop()).flatten();
+                match moved {
+                    Some(p) if fits(&text(1, &[p])) => lines.push(vec![p]),
+                    Some(p) => {
+                        lines[k].push(p);
+                        after = comment_lines(note, newline);
+                    }
+                    None => after = comment_lines(note, newline),
+                }
+            }
         }
-        out.push_str(end);
+        let n = lines.len();
+        for (k, l) in lines.iter().enumerate() {
+            out.push_str(&text(k, l));
+            if k + 1 == n {
+                if after.is_empty() && !note.is_empty() {
+                    out.push(' ');
+                    out.push_str(note);
+                }
+                out.push_str(if after.is_empty() { end } else { newline });
+            } else {
+                out.push_str(newline);
+            }
+        }
+        out.push_str(&after);
     }
     out
 }
@@ -974,6 +1077,107 @@ m2 1001 2
         let c = back.cell_fields(1).unwrap();
         assert_eq!(c.geometry.split_whitespace().count(), 120, "{}", c.geometry);
         assert_eq!(c.params.len(), 1);
+    }
+
+    /// Cell `id` of `card`, read alone: its geometry and its parameters.
+    fn read_alone(card: &str, id: i64) -> (migjorn::Expr, Vec<(String, String)>) {
+        let s = Source::from_str(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
+        let g = s
+            .tree()
+            .cell(id)
+            .unwrap_or_else(|| panic!("cell {id} does not read:\n{card}"))
+            .geometry_expr()
+            .unwrap_or_else(|e| panic!("{}:\n{card}", e.message));
+        let p = s
+            .cell_fields(id)
+            .unwrap()
+            .params
+            .iter()
+            .map(|p| (p.key.clone(), p.value.clone()))
+            .collect();
+        (g, p)
+    }
+
+    fn fits(card: &str) -> bool {
+        card.lines()
+            .all(|l| l.chars().count() <= super::super::MAX_COLUMNS)
+    }
+
+    #[test]
+    fn a_union_without_spaces_is_broken_at_its_colons() {
+        // As the expansion of a `#n` of many surfaces is printed.
+        let union: Vec<String> = (0..40).map(|k| format!("-{}", 10001 + k)).collect();
+        let card = format!("1 0 -1 ({}) imp:n=1\n", union.join(":"));
+        let w = wrap_long_lines(&card);
+        assert!(fits(&w), "{w}");
+        assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{w}");
+    }
+
+    #[test]
+    fn a_comment_is_kept_and_the_lines_still_fit() {
+        let geometry = vec!["-1 2"; 40].join(" ");
+        for n in [1, 30, 60, 100, 125, 200] {
+            let note: String = "x".repeat(n);
+            let card = format!("1 0 {geometry} imp:n=1 $ {note}\n");
+            let w = wrap_long_lines(&card);
+            assert!(fits(&w), "{n}:\n{w}");
+            assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{n}:\n{w}");
+            assert_eq!(w.matches('x').count(), n, "the comment is all there:\n{w}");
+        }
+    }
+
+    #[test]
+    fn non_ascii_lines_are_wrapped_by_characters() {
+        let geometry = vec!["-1 2"; 40].join(" ");
+        let card = format!("1 0 {geometry} imp:n=1 $ zona più calda – µ\n");
+        let w = wrap_long_lines(&card);
+        assert!(fits(&w), "{w}");
+        assert!(w.contains("$ zona più calda – µ"), "{w}");
+        assert_eq!(read_alone(&w, 1), read_alone(&card, 1));
+    }
+
+    fn step(seed: &mut u64, n: u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed % n
+    }
+
+    #[test]
+    fn random_long_cards_fit_and_read_back_the_same() {
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        for case in 0..300 {
+            let mut geometry = String::new();
+            for _ in 0..1 + step(&mut seed, 30) {
+                let n = 1 + step(&mut seed, 12) as usize;
+                let terms: Vec<String> = (0..n)
+                    .map(|_| {
+                        let sign = if step(&mut seed, 2) == 0 { "-" } else { "" };
+                        format!("{sign}{}", 1 + step(&mut seed, 99_999))
+                    })
+                    .collect();
+                geometry += &match step(&mut seed, 3) {
+                    0 => format!("({}) ", terms.join(":")),
+                    1 => format!("{} ", terms.join(" ")),
+                    _ => format!("({}) ", terms.join(" : ")),
+                };
+            }
+            let letter = if step(&mut seed, 2) == 0 { "x" } else { "é" };
+            let note = letter.repeat(step(&mut seed, 140) as usize);
+            let card = if note.is_empty() {
+                format!("1 0 {geometry}imp:n=1 vol=2\n")
+            } else {
+                format!("1 0 {geometry}imp:n=1 vol=2 $ {note}\n")
+            };
+            let w = wrap_long_lines(&card);
+            assert!(fits(&w), "case {case}:\n{w}");
+            assert_eq!(
+                read_alone(&w, 1),
+                read_alone(&card, 1),
+                "case {case}:\n{card}\n{w}"
+            );
+            assert_eq!(w.matches(letter).count(), note.chars().count(), "{w}");
+        }
     }
 
     #[test]

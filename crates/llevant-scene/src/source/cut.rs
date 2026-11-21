@@ -590,6 +590,35 @@ mod tests {
     }
 
     #[test]
+    fn a_long_cut_fits_mcnp_columns() {
+        // B of 40 five-digit planes: its complement is a union of 40 terms,
+        // which migjorn prints without a space; A has a long comment.
+        let planes: Vec<String> = (0..40).map(|k| format!("-{}", 10001 + k)).collect();
+        let rows: Vec<String> = planes.chunks(10).map(|c| c.join(" ")).collect();
+        let mut deck = format!(
+            "t\n1 0 -1 imp:n=1 $ the cell that the other one overlaps, by far\n\
+             2 0 {} imp:n=1\n\n1 so 500\n",
+            rows.join("\n      ")
+        );
+        for k in 0..40 {
+            deck += &format!("{} px {k}\n", 10001 + k);
+        }
+        deck += "\n";
+        let fits = |card: &str| {
+            card.lines()
+                .all(|l| l.chars().count() <= crate::source::MAX_COLUMNS)
+        };
+        let s = Source::from_str(&deck);
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        assert!(!e.plain, "{:?}", e.warnings);
+        assert!(fits(&e.new_card), "{}", e.new_card);
+        assert!(e.new_card.contains("by far"), "{}", e.new_card);
+        s.apply_expand(&e).unwrap();
+        let r = s.cell_simplify(1, &Limits::default()).unwrap();
+        assert!(fits(&r.new_card), "{}", r.new_card);
+    }
+
+    #[test]
     fn simplify_keeps_the_other_complements() {
         // Cell 1 writes #5 and has the expansion of a cut in it: the
         // shorter form keeps #5 (it still follows cell 5).

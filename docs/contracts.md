@@ -122,7 +122,16 @@ changed by migjorn on the card alone, so only the words changed differ and the i
 itself is touched only by the edit that follows (`source/fields.rs` tests, with the
 app test `cell_fields_edited`: a parameter added leaves the rest of the card byte for
 byte). A geometry with as many terms keeps the card's line breaks; any other is
-written again within 128 columns (`geometry_written_term_by_term`).
+written again within 128 columns (`geometry_written_term_by_term`). `wrap_long_lines`
+breaks a line over 128 columns between words, or inside a word of geometry before a `:`
+or a `)` and after a `(` (a union printed without blanks, as the expansion of a `#n`),
+never inside a number or a keyword, counting characters, not bytes. A `$` comment stays
+at the end of the last line, with a word moved down to make room, or else becomes `c`
+lines after it, all of its text kept. Every line it writes fits, and the card reads back
+the same geometry and parameters (`a_union_without_spaces_is_broken_at_its_colons`,
+`a_comment_is_kept_and_the_lines_still_fit`, `non_ascii_lines_are_wrapped_by_characters`,
+and 300 random long cards in `random_long_cards_fit_and_read_back_the_same`; a cut by a
+cell of 40 planes in `source/cut.rs` `a_long_cut_fits_mcnp_columns`).
 Many cards are written as one edit with `Source::edit_many` (all or none: on an error
 the cards written are put back) and taken back with `restore_all`; `cells_with` gives
 the cards of many cells with the same changes (`many_cards_all_or_none`,
