@@ -130,10 +130,16 @@ impl ViewerApp {
                 }
                 Command::CutAccept(s) => self.cut_accept(s, ctx),
                 Command::RevertCut => {
-                    if let Some(d) = &mut self.doc {
-                        d.cut_flow = None;
+                    // Only a cut written, and nothing written after it (the
+                    // flow is closed by any other edit), is taken back.
+                    let written = self.doc.as_mut().and_then(|d| {
+                        let f = d.cut_flow.take()?;
+                        f.stop();
+                        Some(f.is_of(d.source.as_ref()) && f.is_written())
+                    });
+                    if written == Some(true) {
+                        self.undo_input_edit(ctx);
                     }
-                    self.undo_input_edit(ctx);
                 }
                 Command::CancelCutFlow => {
                     if let Some(d) = &mut self.doc {

@@ -266,7 +266,8 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
     // The shortest is the answer if it is proven equal; one that is not is a
     // mistake of the laws above (never given).
     if let Some((e, n)) = candidates.into_iter().next() {
-        // The proof: the form read back, as the geometry will be read.
+        // The proof, on the form as MCNP will write it (the card made of it
+        // is proven again from its text: `Source::cell_simplify`).
         let mut nodes = 0;
         let back = to_bool(&e, None, &mut Vec::new(), &mut nodes)
             .map_err(|why| format!("internal error: {why}"))?;
@@ -285,9 +286,119 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
             }
         };
     }
-    out.warnings
-        .push("not simplified: the result has no restriction left".into());
+    out.warnings.push(if t1 == Bool::True {
+        "not simplified: the result has no restriction left".into()
+    } else {
+        "not simplified: no shorter form can be written without the geometry of a cell \
+         complemented"
+            .into()
+    });
     Ok(out)
+}
+
+/// Whether `got` is the same region as `want`, whatever the surfaces are:
+/// first with every `#n` a variable of its own (equal so, equal for any
+/// cell n), then with every `#n` expanded through `cells`. `None` when that
+/// cannot be told (the proof is too large, or a `#n` cannot be expanded).
+pub fn same(
+    want: &Expr,
+    got: &Expr,
+    cells: &dyn Fn(i64) -> Option<Expr>,
+    limits: &Limits,
+) -> Option<bool> {
+    let proof = |cells: Option<&dyn Fn(i64) -> Option<Expr>>| -> Option<bool> {
+        let (mut n, mut m) = (0, 0);
+        let w = to_bool(want, cells, &mut Vec::new(), &mut n).ok()?;
+        let g = to_bool(got, cells, &mut Vec::new(), &mut m).ok()?;
+        let mut bdd = Bdd::new(limits);
+        Some(bdd.build(&w)? == bdd.build(&g)?)
+    };
+    match proof(None) {
+        Some(true) => Some(true),
+        _ => proof(Some(cells)),
+    }
+}
+
+/// `a` is cut by `#b` already: `#b` is one of the terms intersected.
+pub fn already_cut(a: &Expr, b: i64) -> bool {
+    plain(a, b) == *a
+}
+
+/// `e` with every `#b` in it replaced by `with`.
+fn substitute(e: &Expr, b: i64, with: &Expr) -> Expr {
+    match e {
+        Expr::Complement(n) if *n == b => with.clone(),
+        Expr::Surface(_) | Expr::Complement(_) => e.clone(),
+        Expr::Not(x) => Expr::Not(Box::new(substitute(x, b, with))),
+        Expr::And(v) => Expr::And(v.iter().map(|x| substitute(x, b, with)).collect()),
+        Expr::Or(v) => Expr::Or(v.iter().map(|x| substitute(x, b, with)).collect()),
+    }
+}
+
+fn has_complement(e: &Expr) -> bool {
+    match e {
+        Expr::Surface(_) => false,
+        Expr::Complement(_) => true,
+        Expr::Not(x) => has_complement(x),
+        Expr::And(v) | Expr::Or(v) => v.iter().any(has_complement),
+    }
+}
+
+/// The shortest form of `e` that [`simplify_bool`] proves equal, tried two
+/// ways: with every `#n` kept as written (a variable of its own: the form
+/// keeps following those cells), except `#open`, which is expanded; and
+/// with every `#n` expanded through `cells`. The first wins a tie. `Err`
+/// only for an internal error.
+pub fn shortest(
+    e: &Expr,
+    open: Option<i64>,
+    cells: &dyn Fn(i64) -> Option<Expr>,
+    limits: &Limits,
+) -> Result<Simp, String> {
+    let none = |why: String| Simp {
+        expr: None,
+        terms: 0,
+        empty: false,
+        trace: Vec::new(),
+        warnings: vec![format!("not simplified: {why}")],
+    };
+    let kept = match open {
+        Some(b) => match cells(b) {
+            Some(g) => substitute(e, b, &Expr::Not(Box::new(g))),
+            None => {
+                return Ok(none(format!(
+                    "cell {b} cannot be expanded (TRCL, LIKE or absent)"
+                )))
+            }
+        },
+        None => e.clone(),
+    };
+    let mut nodes = 0;
+    let first = match to_bool(&kept, None, &mut Vec::new(), &mut nodes) {
+        Ok(r) => simplify_bool(&r, limits)?,
+        Err(why) => none(why),
+    };
+    if first.empty || !has_complement(&kept) {
+        return Ok(first);
+    }
+    let mut nodes = 0;
+    let second = match to_bool(&kept, Some(cells), &mut Vec::new(), &mut nodes) {
+        Ok(r) => simplify_bool(&r, limits)?,
+        Err(why) => none(why),
+    };
+    Ok(match (&first.expr, &second.expr) {
+        _ if second.empty => second,
+        (Some(_), Some(_)) if second.terms < first.terms => second,
+        (Some(_), _) => first,
+        (None, Some(_)) => second,
+        // Neither: why the full expansion failed says the most.
+        (None, None) => {
+            let mut s = second;
+            s.warnings.extend(first.warnings);
+            s.warnings.dedup();
+            s
+        }
+    })
 }
 
 /// Cell `b` cut out of the cell whose geometry is `a`: `a ∩ #b`.
@@ -320,17 +431,9 @@ pub fn cut_expr_within(
         warnings: Vec::new(),
     };
 
-    // `A ∩ ¬B` with every `#n` replaced by the negation of cell n.
+    // `A ∩ ¬B`, `#B` expanded, the other `#n` kept if that is no longer.
     let both = Expr::And(vec![a.clone(), Expr::Complement(b)]);
-    let mut nodes = 0;
-    let reference = match to_bool(&both, Some(cells), &mut Vec::new(), &mut nodes) {
-        Ok(r) => r,
-        Err(why) => {
-            cut.warnings.push(format!("not simplified: {why}"));
-            return Ok(cut);
-        }
-    };
-    let s = simplify_bool(&reference, limits)?;
+    let s = shortest(&both, Some(b), cells, limits)?;
     cut.trace = s.trace;
     cut.warnings = s.warnings;
     cut.empty = s.empty;
@@ -366,8 +469,9 @@ pub struct Expanded {
     pub warnings: Vec<String>,
 }
 
-/// `a` ∩ ¬`b`, with `#b` expanded through `cells`; proven equal to the
-/// reference (`a ∩ ¬b`), as [`cut_expr`] proves.
+/// `a` ∩ ¬`b`, with `#b` expanded through `cells`, and whether nothing is
+/// left. [`Source::cut_expand`](super::Source::cut_expand) proves the card
+/// written from its text.
 pub fn expand_cut(
     a: &Expr,
     b: i64,
@@ -383,12 +487,12 @@ pub fn expand_cut(
     let join = |kept: &Expr, added: &Expr| -> Expanded {
         let k = Expr::And(items(kept)).to_string();
         let n = Expr::And(items(added)).to_string();
+        // What is added starts after `k` and a space, in both.
         let start = k.len() + 1;
         let t = Expr::Complement(b).to_string();
-        let plain_start = k.len() + 1;
         Expanded {
             plain_geometry: format!("{k} {t}"),
-            plain_mark: plain_start..plain_start + t.len(),
+            plain_mark: start..start + t.len(),
             mark: start..start + n.len(),
             geometry: format!("{k} {n}"),
             empty: false,
@@ -424,38 +528,14 @@ pub fn expand_cut(
         return Ok(plain_form("nothing to write".into()));
     };
     let mut out = join(a, &added);
-    // The proof: what is written, read back, is `a ∩ ¬b`.
-    let mut nodes = 0;
-    let back = to_bool(
-        &parse_back(&out.geometry, a, &added),
-        Some(cells),
-        &mut Vec::new(),
-        &mut nodes,
-    )
-    .map_err(|why| format!("internal error: {why}"))?;
+    // Nothing left? (The text written is proven equal to `a ∩ ¬b` where it
+    // is written, read back from the card: `Source::cut_expand`.)
     let mut bdd = Bdd::new(limits);
-    match (bdd.build(&reference), bdd.build(&back)) {
-        (Some(w), Some(f)) if w == f => out.empty = w == FALSE,
-        (Some(_), Some(_)) => return Err("internal error: the expansion differs".into()),
-        _ => {
-            return Ok(plain_form("too large to prove equal".into()));
-        }
+    match bdd.build(&reference) {
+        Some(w) => out.empty = w == FALSE,
+        None => return Ok(plain_form("too large to prove equal".into())),
     }
     Ok(out)
-}
-
-/// The expression the text of an expansion stands for, which is the one it
-/// was made from (`a` and `added` as a product).
-fn parse_back(_text: &str, a: &Expr, added: &Expr) -> Expr {
-    let mut v = match a {
-        Expr::And(v) => v.clone(),
-        other => vec![other.clone()],
-    };
-    match added {
-        Expr::And(w) => v.extend(w.iter().cloned()),
-        other => v.push(other.clone()),
-    }
-    Expr::And(v)
 }
 
 /// `a #b`: `#b` added to the intersection (nothing added if it is there).

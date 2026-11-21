@@ -1272,7 +1272,7 @@ fn a_cut_is_proposed_applied_verified_and_simplified() {
     // 1. Proposed: cell 2 with `#3`, nothing written; Cancel closes it.
     propose(&mut h);
     h.get_by_label_contains("Cut #3 from cell 2");
-    h.get_by_label_contains("with #B added");
+    h.get_by_label_contains("with #3 added");
     assert_eq!(h.state().input_edits(), (0, false));
     assert_eq!(cell_card(&h, 2), before);
     if let Some(png) = std::env::var_os("LLEVANT_VIEWER_TEST_PNG") {
@@ -1386,6 +1386,30 @@ fn a_cut_is_reverted_or_its_simplification_discarded() {
     step_until(&mut h, "the undo", |a| {
         a.input_edits().0 == 0 && !a.is_loading()
     });
+
+    // Revert from the simplification shown: the whole cut taken back.
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    h.get_by_label("Simplify").click();
+    step_until(&mut h, "the simplification", |a| {
+        a.document()
+            .and_then(|d| d.cut_flow.as_ref())
+            .is_some_and(|f| match &f.phase {
+                llevant_viewer::cutflow::Phase::Simplifying { slot, .. } => {
+                    llevant_viewer::cutflow::read(slot, |r| r.is_some())
+                }
+                _ => false,
+            })
+    });
+    h.run_steps(4);
+    h.get_by_label("Revert").click();
+    step_until(&mut h, "the revert", |a| {
+        a.input_edits().0 == 0 && !a.is_loading()
+    });
+    h.run_steps(3);
+    assert_eq!(cell_card(&h, 2), before);
+    assert_eq!(flow_phase(&h), "none");
+
     propose(&mut h);
     let text4 = cell_card(&h, 4);
     send_cmd(

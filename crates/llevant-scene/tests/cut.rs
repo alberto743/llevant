@@ -4,7 +4,7 @@
 //! the decks are compiled before and after and classified by brute force.
 
 use llevant::{reference, Depth, Model, Options, Status, Vec3};
-use llevant_scene::source::Source;
+use llevant_scene::source::{Limits, Source};
 
 /// Two spheres that overlap, a void around them.
 const OVERLAP: &str = "overlap
@@ -90,6 +90,59 @@ fn simplified_and_plain_cuts_label_every_point_alike() {
     a.apply_cut(&plain).unwrap();
     b.apply_cut(&simple).unwrap();
     assert_eq!(who(&a.to_source(), &pts), who(&b.to_source(), &pts));
+}
+
+/// The viewer's two steps (`#B` expanded, then simplified) fix the overlap
+/// as the one-step cut does, and the simplification labels every point as
+/// the expansion.
+#[test]
+fn the_two_steps_fix_the_overlap_and_nothing_else() {
+    let pts = grid();
+    let before = who(OVERLAP, &pts);
+    for (keep, cut) in [(2, 1), (1, 2)] {
+        let s = Source::from_str(OVERLAP);
+        let e = s.cut_expand(keep, cut, &Limits::default()).unwrap();
+        s.apply_expand(&e).unwrap();
+        let expanded = who(&s.to_source(), &pts);
+        for (b, a) in before.iter().zip(&expanded) {
+            match b {
+                Err(Status::Overlap) => assert_eq!(*a, Ok(cut)),
+                other => assert_eq!(a, other),
+            }
+        }
+        let r = s.cell_simplify(keep, &Limits::default()).unwrap();
+        if r.simplified {
+            s.apply_simplified(&r).unwrap();
+        }
+        assert_eq!(who(&s.to_source(), &pts), expanded, "{}", r.new_card);
+    }
+}
+
+/// A cell that writes `#keep` takes in what is cut out of `keep`: here it
+/// then overlaps the cut cell (what the viewer's verdict looks for).
+#[test]
+fn a_cell_writing_the_complement_of_the_cut_one_may_overlap_after() {
+    const DECK: &str = "users
+1 0 -1 imp:n=1
+2 0 -2 imp:n=1
+3 0 #1 (2:-1) -3 imp:n=1
+4 0 3 imp:n=0
+
+1 so 5
+2 sx 4 5
+3 so 50
+
+";
+    let pts = grid();
+    let before = who(DECK, &pts);
+    let s = Source::from_str(DECK);
+    let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+    assert_eq!(e.users, vec![3]);
+    s.apply_expand(&e).unwrap();
+    let after = who(&s.to_source(), &pts);
+    // The overlap of 1 and 2 is now one of 3 and 2, in the same place.
+    assert_eq!(before, after);
+    assert!(after.contains(&Err(Status::Overlap)));
 }
 
 /// A cell with a union and a nested complement: the algebra shortens it and

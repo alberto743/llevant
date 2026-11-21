@@ -321,6 +321,8 @@ pub struct Results {
     pub jobs: Vec<Job>,
     pub volumes: Option<Arc<VolumeRun>>,
     pub check: Option<Arc<CheckRun>>,
+    /// How many checks have finished (`check` is the last one).
+    pub checks: u64,
     pub alike: Option<Arc<Alike>>,
 }
 
@@ -1401,6 +1403,7 @@ impl Document {
                         v.seconds
                     ));
                     self.results.check = Some(Arc::new(v));
+                    self.results.checks += 1;
                 }
                 Outcome::Fingerprints(a) => {
                     self.messages.info(format!(

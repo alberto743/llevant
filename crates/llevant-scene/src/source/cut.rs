@@ -7,6 +7,7 @@
 use super::algebra::{self, Cut, Limits};
 use super::fields::CellChange;
 use super::{geometry_words, CardKind, Edited, Source, Word};
+use migjorn::Expr;
 
 /// What cutting cell `cut` out of cell `keep` would do, before anything is
 /// written.
@@ -52,6 +53,9 @@ pub struct CutExpand {
     /// The cells that write `#keep` (they take in what is cut), and other
     /// things to look at.
     pub warnings: Vec<String>,
+    /// The cells that write `#keep` (by number): they take in what is cut,
+    /// and may overlap `cut` after it.
+    pub users: Vec<i64>,
 }
 
 /// What simplifying the geometry of a cell gives, before it is written.
@@ -73,8 +77,8 @@ pub struct Simplified {
 
 impl Source {
     /// The checks every cut makes (see [`Source::cut_plan`]): the card of
-    /// `keep`, and the cells that write `#keep`.
-    fn cut_checks(&self, keep: i64, cut: i64) -> Result<(String, Vec<i64>), String> {
+    /// `keep`, its geometry, and the cells that write `#keep`.
+    fn cut_checks(&self, keep: i64, cut: i64) -> Result<(String, Expr, Vec<i64>), String> {
         if keep == cut {
             return Err(format!("cell {keep} cannot be cut out of itself"));
         }
@@ -110,6 +114,14 @@ impl Source {
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
             .text;
         let tree = self.tree();
+        let a = tree
+            .cell(keep)
+            .ok_or_else(|| format!("no cell {keep} in the input"))?
+            .geometry_expr()
+            .map_err(|e| format!("cell {keep}: {}", e.message))?;
+        if algebra::already_cut(&a, cut) {
+            return Err(format!("cell {keep} is cut by #{cut} already"));
+        }
         let mut users = Vec::new();
         for c in tree.cells() {
             let Some(n) = c.id() else { continue };
@@ -128,61 +140,85 @@ impl Source {
                 users.push(n);
             }
         }
-        Ok((old_card, users))
+        Ok((old_card, a, users))
+    }
+
+    /// Whether `card`, the card of cell `keep` about to be written, read back
+    /// as MCNP reads it, is the region `want` (see [`algebra::same`]).
+    fn proves(&self, keep: i64, card: &str, want: &Expr, limits: &Limits) -> Option<bool> {
+        let got = card_geometry(card, keep).ok()?;
+        let tree = self.tree();
+        algebra::same(want, &got, &|n| expandable(&tree, n), limits)
+    }
+
+    /// The warnings for the cells that write `#keep`.
+    fn user_warnings(keep: i64, cut: i64, users: &[i64]) -> Vec<String> {
+        users
+            .iter()
+            .map(|n| {
+                format!(
+                    "cell {n} writes #{keep}: it will take in what cell {cut} has of cell {keep}"
+                )
+            })
+            .collect()
     }
 
     /// Step one of a cut: cell `cut` taken out of cell `keep` by writing
     /// the complement of `cut`'s geometry into `keep`'s, expanded by De
-    /// Morgan (cheap, valid at any size, proven equal to `A ∩ ¬B`). The
-    /// refusals are those of [`Source::cut_plan`]. A cell cut already by
-    /// `#cut` is an error.
+    /// Morgan (cheap at any size). The card is proven equal to `A ∩ ¬B` as
+    /// it will be read back, or `#cut` is written as it is. The refusals are
+    /// those of [`Source::cut_plan`].
     pub fn cut_expand(&self, keep: i64, cut: i64, limits: &Limits) -> Result<CutExpand, String> {
-        let (old_card, users) = self.cut_checks(keep, cut)?;
-        let tree = self.tree();
-        let a = tree
-            .cell(keep)
-            .ok_or_else(|| format!("no cell {keep} in the input"))?
-            .geometry_expr()
-            .map_err(|e| format!("cell {keep}: {}", e.message))?;
-        if matches!(&a, migjorn::Expr::And(v) if v.contains(&migjorn::Expr::Complement(cut)))
-            || a == migjorn::Expr::Complement(cut)
-        {
-            return Err(format!("cell {keep} is cut by #{cut} already"));
-        }
-        let cells = |n: i64| expandable(&tree, n);
-        let e = algebra::expand_cut(&a, cut, &cells, limits)?;
-        drop(tree);
-        let mut warnings = e.warnings.clone();
-        for n in users {
-            warnings.push(format!(
-                "cell {n} writes #{keep}: it will take in what cell {cut} has of cell {keep}"
-            ));
-        }
-        let new_card = if e.empty {
-            old_card.clone()
-        } else {
-            self.cell_with(keep, &[CellChange::Geometry(e.geometry.clone())])?
+        let (old_card, a, users) = self.cut_checks(keep, cut)?;
+        let e = {
+            let tree = self.tree();
+            algebra::expand_cut(&a, cut, &|n| expandable(&tree, n), limits)?
         };
-        Ok(CutExpand {
+        let mut plan = CutExpand {
             keep,
             cut,
-            old_card,
+            old_card: old_card.clone(),
             plain_geometry: e.plain_geometry,
             plain_mark: e.plain_mark,
-            new_card,
+            new_card: old_card.clone(),
             geometry: e.geometry,
             mark: e.mark,
             empty: e.empty,
             plain: e.plain,
-            warnings,
-        })
+            warnings: e.warnings,
+            users: users.clone(),
+        };
+        plan.warnings.extend(Self::user_warnings(keep, cut, &users));
+        if plan.empty {
+            return Ok(plan);
+        }
+        let want = Expr::And(vec![a, Expr::Complement(cut)]);
+        plan.new_card = self.cell_with(keep, &[CellChange::Geometry(plan.geometry.clone())])?;
+        match self.proves(keep, &plan.new_card, &want, limits) {
+            Some(true) => {}
+            Some(false) => return Err("internal error: the card written differs from A #B".into()),
+            None if plan.plain => {}
+            // Not proven: `#cut` as it is (that is `A #B` by definition).
+            None => {
+                plan.geometry = plan.plain_geometry.clone();
+                plan.mark = plan.plain_mark.clone();
+                plan.plain = true;
+                plan.warnings.insert(
+                    0,
+                    format!("#{cut} is written as it is: too large to prove equal"),
+                );
+                plan.new_card =
+                    self.cell_with(keep, &[CellChange::Geometry(plan.geometry.clone())])?;
+            }
+        }
+        Ok(plan)
     }
 
     /// Step two of a cut: the geometry of cell `keep` as it is in the input
     /// in the fewest terms the Boolean algebra gives, proven equal to it
-    /// (every `#n` is expanded to do it, and the result has none). `limits`
-    /// stop the long work; nothing is written (see
-    /// [`Source::apply_simplified`]).
+    /// (the card as it will be read back). The `#n` in it are kept when that
+    /// is as short, else expanded (see [`algebra::shortest`]). `limits` stop
+    /// the long work; nothing is written (see [`Source::apply_simplified`]).
     pub fn cell_simplify(&self, keep: i64, limits: &Limits) -> Result<Simplified, String> {
         let old_card = self
             .card(CardKind::Cell, keep)
@@ -197,36 +233,27 @@ impl Source {
         if f.params.iter().any(|p| p.key == "trcl") {
             return Err(format!("cell {keep} has a TRCL: simplify it by hand"));
         }
-        let tree = self.tree();
-        let a = tree
-            .cell(keep)
-            .ok_or_else(|| format!("no cell {keep} in the input"))?
-            .geometry_expr()
-            .map_err(|e| format!("cell {keep}: {}", e.message))?;
+        let (a, s) = {
+            let tree = self.tree();
+            let a = tree
+                .cell(keep)
+                .ok_or_else(|| format!("no cell {keep} in the input"))?
+                .geometry_expr()
+                .map_err(|e| format!("cell {keep}: {}", e.message))?;
+            let s = algebra::shortest(&a, None, &|n| expandable(&tree, n), limits)?;
+            (a, s)
+        };
         let terms_before = algebra::terms(&a);
-        let cells = |n: i64| expandable(&tree, n);
-        let mut nodes = 0;
         let mut r = Simplified {
             keep,
             old_card: old_card.clone(),
-            new_card: old_card.clone(),
+            new_card: old_card,
             terms_before,
             terms_after: terms_before,
             simplified: false,
-            trace: Vec::new(),
-            warnings: Vec::new(),
+            trace: s.trace,
+            warnings: s.warnings,
         };
-        let reference = match algebra::to_bool(&a, Some(&cells), &mut Vec::new(), &mut nodes) {
-            Ok(b) => b,
-            Err(why) => {
-                r.warnings.push(format!("not simplified: {why}"));
-                return Ok(r);
-            }
-        };
-        let s = algebra::simplify_bool(&reference, limits)?;
-        drop(tree);
-        r.trace = s.trace;
-        r.warnings = s.warnings;
         if s.empty {
             r.warnings
                 .push("the geometry is empty: nothing to simplify".into());
@@ -234,9 +261,20 @@ impl Source {
         }
         match s.expr {
             Some(e) if s.terms < terms_before => {
-                r.new_card = self.cell_with(keep, &[CellChange::Geometry(e.to_string())])?;
-                r.terms_after = s.terms;
-                r.simplified = true;
+                let card = self.cell_with(keep, &[CellChange::Geometry(e.to_string())])?;
+                match self.proves(keep, &card, &a, limits) {
+                    Some(true) => {
+                        r.new_card = card;
+                        r.terms_after = s.terms;
+                        r.simplified = true;
+                    }
+                    Some(false) => {
+                        return Err("internal error: the card written differs".into());
+                    }
+                    None => r
+                        .warnings
+                        .push("not simplified: the card is too large to prove equal".into()),
+                }
             }
             Some(_) => r
                 .warnings
@@ -278,123 +316,57 @@ impl Source {
         self.apply_card(s.keep, &s.old_card, &s.new_card)
     }
 
-    /// What cutting cell `cut` out of cell `keep` gives: its geometry
-    /// `A` becomes `A #B`, simplified by Boolean algebra when `simplify` (the
-    /// result is proven equal to `A ∩ ¬B`, whatever the surfaces are; see
-    /// [`algebra`](super::algebra)). Nothing is written: [`Source::apply_cut`]
-    /// does.
+    /// What cutting cell `cut` out of cell `keep` gives, in one step: its
+    /// geometry `A` becomes `A #B`, simplified by Boolean algebra when
+    /// `simplify` (`#B` expanded, the other `#n` kept when that is as short;
+    /// the card is proven equal to `A ∩ ¬B` from its text, whatever the
+    /// surfaces are; see [`algebra`](super::algebra)). The plain `A #B` is
+    /// kept on a tie. Nothing is written: [`Source::apply_cut`] does.
     ///
     /// An error for a cell the input has not got, cells in different
     /// universes (`u=` on their cards), a `LIKE` cell, a `keep` with a `TRCL`
-    /// (MCNP moves the surfaces of a `#n` by the cell's own `TRCL`) and a
-    /// `keep` that a `LIKE` cell copies (that cell would be cut too). A `cut`
-    /// with a `TRCL`, or `#n` of a cell that cannot be expanded, is written
-    /// as `#n` and not simplified. A warning for each cell that writes
-    /// `#keep`: it then takes in what is cut.
+    /// (MCNP moves the surfaces of a `#n` by the cell's own `TRCL`), a `keep`
+    /// that a `LIKE` cell copies (that cell would be cut too) and a `keep`
+    /// cut by `#cut` already. A `cut` with a `TRCL`, or `#n` of a cell that
+    /// cannot be expanded, is written as `#n` and not simplified. A warning
+    /// for each cell that writes `#keep`: it then takes in what is cut.
     pub fn cut_plan(&self, keep: i64, cut: i64, simplify: bool) -> Result<CutPlan, String> {
-        if keep == cut {
-            return Err(format!("cell {keep} cannot be cut out of itself"));
-        }
-        let f = self
-            .cell_fields(keep)
-            .ok_or_else(|| format!("no cell {keep} in the input"))?;
-        let g = self
-            .cell_fields(cut)
-            .ok_or_else(|| format!("no cell {cut} in the input"))?;
-        if f.like.is_some() {
-            return Err(format!("cell {keep} is a LIKE cell: cut it by hand"));
-        }
-        if f.params.iter().any(|p| p.key == "trcl") {
-            return Err(format!(
-                "cell {keep} has a TRCL, which would move #{cut} with it: cut it by hand"
-            ));
-        }
-        let universe = |fields: &super::fields::CellFields| {
-            fields
-                .params
-                .iter()
-                .find(|p| p.key == "u")
-                .map(|p| p.value.trim_start_matches('-').to_string())
-                .unwrap_or_else(|| "0".into())
-        };
-        if universe(&f) != universe(&g) {
-            return Err(format!(
-                "cells {keep} and {cut} are in different universes: they cannot overlap"
-            ));
-        }
-
-        let old_card = self
-            .card(CardKind::Cell, keep)
-            .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
-            .text;
-        let (mut result, already, users) = {
+        let (old_card, a, users) = self.cut_checks(keep, cut)?;
+        let mut result = if simplify {
             let tree = self.tree();
-            let a = tree
-                .cell(keep)
-                .ok_or_else(|| format!("no cell {keep} in the input"))?
-                .geometry_expr()
-                .map_err(|e| format!("cell {keep}: {}", e.message))?;
-            // The cells that copy `keep` or complement it change with it.
-            let mut users = Vec::new();
-            for c in tree.cells() {
-                let Some(n) = c.id() else { continue };
-                if n == keep {
-                    continue;
-                }
-                if c.like() == Some(keep) {
-                    return Err(format!(
-                        "cell {n} is LIKE {keep} BUT: it would be cut too; cut it by hand"
-                    ));
-                }
-                let complements = geometry_words(&c.geometry_text())
-                    .iter()
-                    .any(|w| matches!(w.kind, Word::Cell(m) if m == keep));
-                if complements && !users.contains(&n) {
-                    users.push(n);
-                }
-            }
-            // A cell `#n` can be expanded through: its own geometry, no
-            // `TRCL`, not a `LIKE`.
-            let cells = |n: i64| {
-                let c = tree.cell(n)?;
-                if c.like().is_some()
-                    || c.params()
-                        .iter()
-                        .any(|p| p.qualified_key().eq_ignore_ascii_case("trcl"))
-                {
-                    return None;
-                }
-                c.geometry_expr().ok()
-            };
-            let mut r = if simplify {
-                algebra::cut_expr(&a, cut, &cells)?
-            } else {
-                let mut r = algebra::cut_expr(&a, cut, &|_| None)?;
-                // Its "cannot be expanded" is the point of a plain cut.
-                r.warnings.clear();
-                r.trace.clear();
-                r
-            };
-            // `A` has `#B` already: nothing to write (not even a shorter `A`).
-            let already = r.plain == a.to_string();
-            if already {
-                r.geometry = r.plain.clone();
-                r.terms_after = r.terms_before;
-                r.simplified = false;
-                r.warnings = vec![format!("cell {keep} is cut by #{cut} already")];
-            }
-            (r, already, users)
-        };
-        for n in users {
-            result.warnings.push(format!(
-                "cell {n} writes #{keep}: it will take in what cell {cut} has of cell {keep}"
-            ));
-        }
-        let new_card = if result.empty || already {
-            old_card.clone()
+            algebra::cut_expr(&a, cut, &|n| expandable(&tree, n))?
         } else {
-            self.cell_with(keep, &[CellChange::Geometry(result.geometry.clone())])?
+            let mut r = algebra::cut_expr(&a, cut, &|_| None)?;
+            // Its "cannot be expanded" is the point of a plain cut.
+            r.warnings.clear();
+            r.trace.clear();
+            r
         };
+        result
+            .warnings
+            .extend(Self::user_warnings(keep, cut, &users));
+        let mut new_card = old_card.clone();
+        if !result.empty {
+            new_card = self.cell_with(keep, &[CellChange::Geometry(result.geometry.clone())])?;
+            let want = Expr::And(vec![a, Expr::Complement(cut)]);
+            match self.proves(keep, &new_card, &want, &Limits::within(PROOF_LIMIT)) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err("internal error: the card written differs from A #B".into())
+                }
+                None if !result.simplified => {}
+                None => {
+                    result.geometry = result.plain.clone();
+                    result.terms_after = result.terms_before;
+                    result.simplified = false;
+                    result
+                        .warnings
+                        .push("not simplified: the card is too large to prove equal".into());
+                    new_card =
+                        self.cell_with(keep, &[CellChange::Geometry(result.geometry.clone())])?;
+                }
+            }
+        }
         Ok(CutPlan {
             keep,
             cut,
@@ -415,20 +387,26 @@ impl Source {
                 plan.keep, plan.cut
             ));
         }
-        let now = self.card(CardKind::Cell, plan.keep).map(|c| c.text);
-        if now.as_deref() != Some(plan.old_card.as_str()) {
-            return Err(format!(
-                "cell {} has changed since the cut was planned: plan it again",
-                plan.keep
-            ));
-        }
-        self.edit(CardKind::Cell, plan.keep, &plan.new_card)
+        self.apply_card(plan.keep, &plan.old_card, &plan.new_card)
     }
+}
+
+/// The longest the proof of a card made by [`Source::cut_plan`] may take.
+const PROOF_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The geometry of cell `keep` in `card`, as MCNP reads it (the card alone
+/// in an input of its own; a `#n` stays `#n`).
+fn card_geometry(card: &str, keep: i64) -> Result<Expr, String> {
+    let m = migjorn::Model::parse(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
+    m.cell(keep)
+        .ok_or_else(|| format!("cell {keep}: the card does not read back"))?
+        .geometry_expr()
+        .map_err(|e| format!("cell {keep}: {}", e.message))
 }
 
 /// The geometry of cell `n` for a `#n` to expand through: its own, with no
 /// `TRCL`, not a `LIKE`.
-fn expandable(tree: &migjorn::Model, n: i64) -> Option<migjorn::Expr> {
+fn expandable(tree: &migjorn::Model, n: i64) -> Option<Expr> {
     let c = tree.cell(n)?;
     if c.like().is_some()
         || c.params()
@@ -583,18 +561,47 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_cut_already_is_left_as_it_is() {
+    fn a_cell_cut_already_is_refused_by_both_steps() {
         let s = Source::from_str("t\n1 0 -1 #2 imp:n=1\n2 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n\n");
         for simplify in [false, true] {
-            let p = s.cut_plan(1, 2, simplify).unwrap();
-            assert_eq!(p.new_card, p.old_card);
-            assert!(!p.result.simplified);
-            assert!(
-                p.result.warnings[0].contains("already"),
-                "{:?}",
-                p.result.warnings
-            );
+            let err = s.cut_plan(1, 2, simplify).unwrap_err();
+            assert!(err.contains("already"), "{err}");
         }
+        let err = s.cut_expand(1, 2, &Limits::default()).unwrap_err();
+        assert!(err.contains("already"), "{err}");
+    }
+
+    #[test]
+    fn the_card_written_is_proven_from_its_text() {
+        let s = Source::from_str(INPUT);
+        let want = Expr::And(vec![
+            card_geometry(&s.card(CardKind::Cell, 1).unwrap().text, 1).unwrap(),
+            Expr::Complement(2),
+        ]);
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        assert_eq!(
+            s.proves(1, &e.new_card, &want, &Limits::default()),
+            Some(true)
+        );
+        // A card that reads otherwise (a union where the text lost its
+        // parentheses) is told apart.
+        let wrong = "1 0 -1:-2 3 1:-3 imp:n=1\n";
+        assert_eq!(s.proves(1, wrong, &want, &Limits::default()), Some(false));
+    }
+
+    #[test]
+    fn simplify_keeps_the_other_complements() {
+        // Cell 1 writes #5 and has the expansion of a cut in it: the
+        // shorter form keeps #5 (it still follows cell 5).
+        let s = Source::from_str(
+            "t\n1 0 (-1:-2) 3 (1:-3) #5 imp:n=1\n2 0 -1 3 imp:n=1\n5 0 -4 -6 7 imp:n=1\n\n\
+             1 so 5\n2 so 9\n3 px 0\n4 so 2\n6 py 0\n7 pz 0\n\n",
+        );
+        let r = s.cell_simplify(1, &Limits::default()).unwrap();
+        assert!(r.simplified, "{:?}", r.warnings);
+        assert!(r.new_card.contains("#5"), "{}", r.new_card);
+        // -2 3 1 #5: the expanded #5 would be three terms more.
+        assert_eq!(r.terms_after, 4, "{}", r.new_card);
     }
 
     #[test]
@@ -645,6 +652,7 @@ mod tests {
         );
         let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
         assert!(e.warnings.iter().any(|w| w.contains("cell 3 writes #1")));
+        assert_eq!(e.users, vec![3]);
     }
 
     #[test]
@@ -661,9 +669,9 @@ mod tests {
         let ed = s.apply_simplified(&r).unwrap();
         assert!(s.to_source().contains("1 0 -2 3 1 imp:n=1"));
         s.restore(&ed).unwrap();
-        // A second time, from the shorter card: nothing to do.
+        // Restored, the expanded card is back, and simplifies again.
         let again = s.cell_simplify(1, &Limits::default()).unwrap();
-        assert!(again.simplified, "(the card was restored)");
+        assert!(again.simplified);
     }
 
     #[test]

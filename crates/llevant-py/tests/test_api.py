@@ -671,7 +671,8 @@ def test_deck_cut_is_simplified_by_boolean_algebra():
     plain = deck.cut(1, 2, simplify=False)
     cut = deck.cut(1, 2)
     assert plain.geometry == "(-1:-2) 3 #2" and not plain.simplified
-    assert cut.geometry == "1 -2 3" and cut.simplified
+    # The same three terms, in whatever order the algebra writes them.
+    assert sorted(cut.geometry.split()) == ["-2", "1", "3"] and cut.simplified
     assert cut.trace
 
 

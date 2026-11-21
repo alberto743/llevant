@@ -589,12 +589,14 @@ class Deck:
     def cut(self, keep: int, cut: int, *, simplify: bool = True) -> Cut:
         """What cutting cell `cut` out of cell `keep` would do: `#cut` added
         to its geometry (so the two no longer overlap), and with `simplify`
-        the result put in fewer terms by Boolean algebra alone, proven equal to
-        `keep` outside `cut` for any surfaces. Nothing is written.
+        the result put in fewer terms by Boolean algebra alone (`#cut`
+        expanded, the other `#n` kept when that is as short), the card proven
+        equal to `keep` outside `cut` for any surfaces, as it reads back. The
+        plain `#cut` is kept on a tie. Nothing is written.
         `ValueError` for a cell not in the input, cells in different
-        universes, a `LIKE` cell, a `keep` with a `TRCL` and a `keep` that a
-        `LIKE` cell copies. `Cut.warnings` names the cells that write `#keep`
-        (they take in what is cut).
+        universes, a `LIKE` cell, a `keep` with a `TRCL`, a `keep` that a
+        `LIKE` cell copies and a `keep` cut by `#cut` already. `Cut.warnings`
+        names the cells that write `#keep` (they take in what is cut).
         """
     def apply(self, cut: Cut) -> None:
         """Write a cut into the deck. `ValueError` if it has nothing to write

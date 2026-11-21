@@ -55,3 +55,19 @@ BDD proof under 6 ms, and the result was often no shorter. So:
   GEOUNED proves nothing; here the BDD proof stays, and the result is given only with it.
 - The BDD variable order was not the problem (it is the order of first appearance).
 
+## Amendment, 2026-11-20: what the viewer gives up, what it checks, what is proven
+
+- The viewer writes `#B` expanded even when the algebra is no shorter, so cell A no
+  longer follows later edits of cell B (the tie rule above stays for `cut_plan`). This
+  was chosen: the expansion is what the user reviews and what Simplify works on.
+- `A ∩ ¬B` and `B` are disjoint by construction, so the check after the cut cannot find
+  them overlapping. What can go wrong is a cell that writes `#A`: it takes in `A ∩ B`
+  and may overlap B. The verdict reports that as a new overlap (`CutExpand::users`).
+- The proof is made on the card about to be written, read back from its text, not on the
+  expression it was printed from, so a printing mistake cannot pass.
+- The simplification keeps each other `#n` as a variable of its own (a form equal so is
+  equal for any cell n) when that is as short, so those cells are still followed. Before,
+  every `#n` was written out, and the result was seldom shorter than the `#n` it replaced.
+- `cut_plan` and the two steps share their checks, so a cell cut by `#B` already is refused
+  by both.
+

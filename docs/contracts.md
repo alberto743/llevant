@@ -59,23 +59,31 @@ that meet an overlap, stopping at it or seeing through it, are not compared.
 `Source::cut_plan(keep, cut, simplify)` gives cell `keep` the geometry `A ∩ ¬B` (written
 `A #B`, or in fewer terms when `simplify`). The shorter form uses only the laws of
 Boolean algebra on the surface senses as independent variables (a macrobody facet is a
-variable of its own), so it is the same region for any surfaces. Every call proves it:
-`#n` is expanded by De Morgan, and reduced ordered BDDs of the unsimplified `A ∩ ¬B` and
-of the result must be the same node, else the call is an error and nothing is written
+variable of its own, and so is each `#n` kept), so it is the same region for any
+surfaces. Every call proves it on the card about to be written, read back from its text
+as MCNP reads it (`Source::proves`, `algebra::same`): reduced ordered BDDs of `A ∩ ¬B`
+and of what the card reads as must be the same node, first with each `#n` a variable of
+its own, else with every `#n` expanded by De Morgan. A card proven different is an
+error and nothing is written; one too large to prove is written as the plain `A #B`
 (`source/algebra.rs` tests, among them 400 random cuts compared with truth tables, and
-the BDDs telling a wrong form from a right one). A `keep` with a `TRCL`, a `LIKE` cell, a
-`keep` that a `LIKE` cell copies and cells in different universes are refused; a `cut`
-with a `TRCL` is written as `#n` and not expanded; the cells that write `#keep` are named
-in the warnings. `apply_cut` refuses a plan made when `keep`'s card was not as it is now
-(`source/cut.rs` tests). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
+the BDDs telling a wrong form from a right one; `source/cut.rs`
+`the_card_written_is_proven_from_its_text` tells a card that lost its parentheses). A
+`keep` with a `TRCL`, a `LIKE` cell, a `keep` that a `LIKE` cell copies, a `keep` cut by
+`#cut` already and cells in different universes are refused (the one-step and the
+two-step cuts alike, `cut_checks`); a `cut` with a `TRCL` is written as `#n` and not
+expanded; the cells that write `#keep` are named in the warnings and in
+`CutExpand::users`. `apply_cut` refuses a plan made when `keep`'s card was not as it is
+now (`source/cut.rs` tests). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
 keeps its cell, and the simplified and plain cuts label every point alike.
 
 The viewer cuts in two steps, each its own edit. `Source::cut_expand` writes `A` with
 `#B` replaced by the complement of cell B (De Morgan only, so it costs a visit of B's
-geometry at any size); it is proven equal to `A ∩ ¬B` with BDDs, and `empty` is set when
-nothing is left (`source/cut.rs` tests). `Source::cell_simplify` shortens the geometry as
-it is then: `simplify_bool` tries a tree pass first (`source/algebra/tree.rs`: a literal
+geometry at any size); its card is proven equal to `A ∩ ¬B` as above, and `empty` is set
+when nothing is left (`source/cut.rs` tests). `Source::cell_simplify` shortens the
+geometry as it is then, two ways (`algebra::shortest`): with each `#n` kept as a variable,
+and with every `#n` expanded; the shorter wins, the first on a tie
+(`simplify_keeps_the_other_complements`). Each way, `simplify_bool` tries a tree pass first (`source/algebra/tree.rs`: a literal
 known from the products and sums around it is replaced by 0 or 1, `x·¬x = 0`, absorption;
 a random test of 400 expressions checks that each result is the same function and not
 longer), then the disjunctive-normal-form path only for what has at most 256 products,
@@ -83,6 +91,10 @@ under a time limit and a cancel flag (`Limits`). The shortest form is given only
 the BDDs prove it equal; the proof or the limits failing gives no form. A cut of 14 groups
 by 16 planes, which took seconds in the normal-form path, is done at once (`algebra.rs`
 tests). `apply_card` refuses a plan made when the card was not as it is now.
+`crates/llevant-scene/tests/cut.rs` compiles the two steps as well: the expansion fixes
+the overlap and changes nothing else, the simplification labels every point as the
+expansion, and a cell that writes `#A` takes in `A ∩ B` (the overlap the viewer's verdict
+then reports as new, `panels/inspector/cut.rs` `judge` tests).
 
 ## Editing the input
 

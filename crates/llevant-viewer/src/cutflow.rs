@@ -5,13 +5,18 @@
 //! Problems panel (which starts it), the inspector (which shows it) and the
 //! application (which writes it) all see it.
 //!
-//! 1. *Proposed*: the cell with `#B` added, planned in the background.
-//! 2. *Applying*, once approved: `#B` written as what it stands for.
-//! 3. *Verifying*: the check of what changed says whether the overlap is
-//!    solved; if not, the cut is reverted.
-//! 4. *Simplifying*, on request, in the background (it can take long, and
-//!    stops at its limits): the shorter geometry, proven equal, shown as a
-//!    diff to accept or discard.
+//! The steps, as `docs/guide/viewer.md` numbers them, and their phases:
+//!
+//! 1. Proposed ([`Phase::Planning`]): the cell with `#B` added, planned in
+//!    the background; Apply or Cancel.
+//! 2. Written ([`Phase::Applying`]): `#B` written as what it stands for.
+//! 3. Verified ([`Phase::Verifying`]): the check of what changed says
+//!    whether the overlap is solved, or remains, or a cell that writes `#A`
+//!    now overlaps B; Revert takes the cut back.
+//! 4. Simplified ([`Phase::Simplifying`]), on request, in the background
+//!    (it stops at its limits): the shorter geometry, proven equal, shown as
+//!    a diff.
+//! 5. Accepted or discarded (or the whole cut reverted): the flow closes.
 
 use llevant_scene::source::{CutExpand, Limits, Simplified, Source};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +28,9 @@ pub type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
 /// The longest the simplification may take.
 pub const SIMPLIFY_LIMIT: Duration = Duration::from_secs(20);
+
+/// The longest planning the cut (its proof) may take.
+pub const PLAN_LIMIT: Duration = Duration::from_secs(30);
 
 pub struct CutFlow {
     /// The cell that changes, and the cell taken out of it.
@@ -38,12 +46,9 @@ pub enum Phase {
     Planning(Slot<CutExpand>),
     /// Approved: being written and built.
     Applying(CutExpand),
-    /// Written. `check_before`: the check's result when it was written (a
-    /// different one is the check of what the cut changed).
-    Verifying {
-        plan: CutExpand,
-        check_before: usize,
-    },
+    /// Written. `check_before`: which check the document had when it was
+    /// written (a later one is the check of what the cut changed).
+    Verifying { plan: CutExpand, check_before: u64 },
     /// Being simplified, then shown (the result, once made).
     Simplifying {
         slot: Slot<Simplified>,
@@ -61,7 +66,7 @@ impl CutFlow {
         let slot: Slot<CutExpand> = Arc::new(Mutex::new(None));
         let (src, out, ctx) = (source.clone(), slot.clone(), ctx.clone());
         std::thread::spawn(move || {
-            let r = src.cut_expand(keep, cut, &Limits::within(Duration::from_secs(30)));
+            let r = src.cut_expand(keep, cut, &Limits::within(PLAN_LIMIT));
             *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
             ctx.request_repaint();
         });
@@ -84,9 +89,17 @@ impl CutFlow {
         (self.keep, self.cut) == (keep, cut)
     }
 
+    /// Whether the cut is written (and Revert has an edit to take back).
+    pub fn is_written(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Verifying { .. } | Phase::Simplifying { .. }
+        )
+    }
+
     /// The cut was written (`source` is the input now) and the check of
     /// what changed is next; `check_before` identifies the check before it.
-    pub fn written(&mut self, source: Option<&Arc<Source>>, check_before: usize) {
+    pub fn written(&mut self, source: Option<&Arc<Source>>, check_before: u64) {
         if let Phase::Applying(plan) = &self.phase {
             if let Some(s) = source {
                 self.key = key(s);
@@ -130,10 +143,8 @@ pub fn read<T, R>(slot: &Slot<T>, f: impl FnOnce(Option<&Result<T, String>>) -> 
     f(g.as_ref())
 }
 
-/// Which check the document has: a different one is a newer one.
-pub fn check_id(doc: &crate::document::Document) -> usize {
-    doc.results
-        .check
-        .as_ref()
-        .map_or(0, |c| Arc::as_ptr(c) as usize)
+/// Which check the document has (how many it has had): a larger number is
+/// a newer check.
+pub fn check_id(doc: &crate::document::Document) -> u64 {
+    doc.results.checks
 }
