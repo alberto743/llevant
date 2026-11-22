@@ -17,11 +17,11 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use llevant::{Error, Result};
 
-pub mod algebra;
+mod algebra;
 mod cut;
 mod fields;
 mod many;
-pub use algebra::Limits;
+pub use algebra::{Cut, Limits};
 pub use cut::{CutExpand, CutPlan, Simplified};
 pub use fields::{
     coefficient_names, general_forms, geometry_words, wrap_long_lines, CellChange, CellFields,

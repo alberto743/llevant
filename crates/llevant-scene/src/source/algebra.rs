@@ -1,23 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Alberto Previti
 // SPDX-License-Identifier: EUPL-1.2
-//! Cutting one cell out of another in the Boolean algebra of their geometry:
-//! `A ∩ #B`, written in fewer terms when the laws of Boolean algebra allow.
+//! The Boolean algebra of cell geometries: a cell cut out of another
+//! (`A ∩ #B`, [`expand_cut`], [`cut_expr`]) and a geometry in fewer terms
+//! ([`shortest`], [`simplify_bool`]), proven equal ([`same`]).
 //!
 //! Only the algebra is used. Every `+s`/`-s` of a surface is a variable and
 //! its negation (a macrobody facet `470.2` is a variable of its own, never
-//! tied to the whole surface `470`), and nothing is assumed about where the
-//! surfaces are. Each step below is an identity valid for every value of the
-//! variables, so the result is the same region in any geometry. On top of
-//! that [`cut_expr`] proves the result equal to the unsimplified `A ∩ ¬B`
-//! with reduced ordered BDDs (canonical: the same function gets the same
-//! node), so the guarantee does not rest on the steps being coded right. A
-//! result that cannot be proven is never given.
+//! tied to the whole surface `470`), a `#n` kept is a variable too, and
+//! nothing is assumed about where the surfaces are. Each step is an identity
+//! valid for every value of the variables, so the result is the same region
+//! in any geometry. A form is given only when reduced ordered BDDs
+//! (canonical: the same function gets the same node) prove it equal, so the
+//! guarantee does not rest on the steps being coded right; `Source` proves
+//! the card again from its text.
 //!
-//! Steps: `#n` replaced by the negation of cell `n` (De Morgan, at any
-//! depth), negation normal form, disjunctive normal form (distributivity,
-//! `x·¬x = 0`, idempotence, absorption), all prime implicants by iterated
-//! consensus, an irredundant cover of them, and factoring (distributivity
-//! read backwards). The shortest of the forms is kept.
+//! The steps of [`simplify_bool`]: negation normal form; the first tier
+//! ([`tree`]: a literal known from the products and sums around it is a
+//! constant below, `x·¬x = 0`, absorption; one visit of the expression);
+//! then, for what has at most 256 products and within the [`Limits`], the
+//! second tier on the expression and on its complement negated back (a union
+//! of products and an intersection of unions): disjunctive normal form, all
+//! prime implicants by iterated consensus, an irredundant cover, factoring.
+//! The shortest proven form wins. [`shortest`] runs it with the other `#n`
+//! kept and with them expanded. Why, and the measurements: ADR 0016.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,7 +68,7 @@ pub enum Bool {
     Or(Vec<Bool>),
 }
 
-/// What [`cut_expr`] gives.
+/// A cut in one step, as [`CutPlan::result`](super::CutPlan::result) holds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cut {
     /// The geometry of the cut cell, to write.
@@ -1071,7 +1076,8 @@ impl Bdd {
 
 /// Are the two expressions the same function of their atoms? `None` if the
 /// diagrams get too large to tell.
-pub fn equivalent(a: &Bool, b: &Bool) -> Option<bool> {
+#[cfg(test)]
+fn equivalent(a: &Bool, b: &Bool) -> Option<bool> {
     let mut bdd = Bdd::new(&Limits::default());
     let fa = bdd.build(a)?;
     let fb = bdd.build(b)?;

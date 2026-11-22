@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Cutting a cell out of another one (the fix for an overlap): `A := A ∩ #B`,
 //! written in the fewest terms the Boolean algebra gives
-//! ([`algebra`](super::algebra)).
+//! (the `algebra` module).
 
 use super::algebra::{self, Cut, Limits};
 use super::fields::CellChange;
@@ -217,7 +217,7 @@ impl Source {
     /// Step two of a cut: the geometry of cell `keep` as it is in the input
     /// in the fewest terms the Boolean algebra gives, proven equal to it
     /// (the card as it will be read back). The `#n` in it are kept when that
-    /// is as short, else expanded (see [`algebra::shortest`]). `limits` stop
+    /// is as short, else expanded (`algebra::shortest`). `limits` stop
     /// the long work; nothing is written (see [`Source::apply_simplified`]).
     pub fn cell_simplify(&self, keep: i64, limits: &Limits) -> Result<Simplified, String> {
         let old_card = self
@@ -320,7 +320,7 @@ impl Source {
     /// geometry `A` becomes `A #B`, simplified by Boolean algebra when
     /// `simplify` (`#B` expanded, the other `#n` kept when that is as short;
     /// the card is proven equal to `A ∩ ¬B` from its text, whatever the
-    /// surfaces are; see [`algebra`](super::algebra)). The plain `A #B` is
+    /// surfaces are; the `algebra` module). The plain `A #B` is
     /// kept on a tie. Nothing is written: [`Source::apply_cut`] does.
     ///
     /// An error for a cell the input has not got, cells in different

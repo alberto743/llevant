@@ -1218,7 +1218,7 @@ impl Document {
             | Command::OpenDialog
             | Command::Reload
             | Command::EditCard(..)
-            | Command::PreviewCut { .. }
+            | Command::ProposeCut { .. }
             | Command::CutApply(_)
             | Command::CutSimplify
             | Command::CutAccept(_)

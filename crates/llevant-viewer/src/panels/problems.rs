@@ -136,12 +136,14 @@ fn problem_row(
                             .is_some_and(|f| f.is(keep, cut) && f.is_of(doc.source.as_ref()));
                         let r = ui
                             .selectable_label(open, format!("{} #{cut} from {keep}", icons::CLIP))
-                            .on_hover_text("Click to preview the cut in the inspector");
+                            .on_hover_text(
+                                "Propose the cut in the inspector (nothing is written until Apply)",
+                            );
                         if r.clicked() {
                             out.push(if open {
                                 Command::CancelCutFlow
                             } else {
-                                Command::PreviewCut { keep, cut }
+                                Command::ProposeCut { keep, cut }
                             });
                         }
                     }

@@ -99,7 +99,7 @@ impl ViewerApp {
                     }
                 }
                 Command::EditCard(kind, id, text) => self.edit_card(kind, id, text, ctx),
-                Command::PreviewCut { keep, cut } => {
+                Command::ProposeCut { keep, cut } => {
                     if let Some(d) = &mut self.doc {
                         // Only a cut not yet written is replaced by another.
                         let busy = d.cut_flow.as_ref().is_some_and(|f| {

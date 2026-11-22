@@ -1234,7 +1234,7 @@ fn flow_phase(h: &Harness<'_, ViewerApp>) -> &'static str {
 /// Step 1 of a cut: proposed in the inspector, `#3` shown on cell 2, and
 /// nothing written; Cancel closes it.
 fn propose(h: &mut Harness<'_, ViewerApp>) {
-    send_cmd(h, Command::PreviewCut { keep: 2, cut: 3 });
+    send_cmd(h, Command::ProposeCut { keep: 2, cut: 3 });
     step_until(h, "the plan", |a| {
         a.document()
             .and_then(|d| d.cut_flow.as_ref())

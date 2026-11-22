@@ -485,7 +485,7 @@ pub enum Command {
     /// Start fixing an overlap by cutting cell `cut` out of cell `keep`
     /// (`#cut` added to its geometry), shown in the inspector (planned in
     /// the background); nothing is written until [`Command::CutApply`].
-    PreviewCut {
+    ProposeCut {
         keep: i64,
         cut: i64,
     },
