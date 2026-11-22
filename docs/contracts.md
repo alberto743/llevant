@@ -86,8 +86,11 @@ and with every `#n` expanded; the shorter wins, the first on a tie
 (`simplify_keeps_the_other_complements`). Each way, `simplify_bool` tries a tree pass first (`source/algebra/tree.rs`: a literal
 known from the products and sums around it is replaced by 0 or 1, `x·¬x = 0`, absorption;
 a random test of 400 expressions checks that each result is the same function and not
-longer), then the disjunctive-normal-form path only for what has at most 256 products,
-under a time limit and a cancel flag (`Limits`). The shortest form is given only when
+longer), then the disjunctive-normal-form path, on the expression and on its complement
+negated back (an intersection of unions), each only for what has at most 256 products,
+under a time limit and a cancel flag (`Limits`)
+(`the_dual_form_shortens_an_intersection_of_unions`,
+`groups_cut_by_planes_stay_short_and_fast`). The shortest form is given only when
 the BDDs prove it equal; the proof or the limits failing gives no form. A cut of 14 groups
 by 16 planes, which took seconds in the normal-form path, is done at once (`algebra.rs`
 tests). `apply_card` refuses a plan made when the card was not as it is now.

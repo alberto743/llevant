@@ -71,3 +71,26 @@ BDD proof under 6 ms, and the result was often no shorter. So:
 - `cut_plan` and the two steps share their checks, so a cell cut by `#B` already is refused
   by both.
 
+
+## Amendment, 2026-11-22: the second tier on the complement too
+
+Measured (release, the second tier uncapped, A of m groups `(a:b)` cut by 16 planes): the
+first tier gives the short form (2m+1 terms) in microseconds; the normal form has 2^m
+products, all essential, and factoring does not bring the product of sums back, so the
+second tier wrote 2^(m+1)−1 terms (511 at m = 8, 32 767 at m = 14), at a cost growing about
+4 times per group, most of it in the redundancy test (14 s at m = 12, 58 s at m = 13). Memory
+was not the limit (63 MB at 16 384 products). A search of 4 000 random expressions found
+none still over 256 products after the first tier. More time, or cores, would not have
+helped: a union of products is the wrong shape for MCNP cells, which are mostly
+intersections of unions.
+
+- The second tier also runs on the complement, negated back by De Morgan: an intersection
+  of unions. The complement of m groups has m products, so what explodes one way is small
+  the other. Each side has its own cap of 256 products; the shortest proven form wins, a
+  tie keeping the earlier one, so no result is longer than before.
+- Measured after: the groups case 3 ms up to m = 18; `(a:b1)…(a:b9)` with k groups,
+  which neither tier shortened before, becomes `(a : b1 … b9)` with the groups (26 → 18
+  terms at k = 4, 50 → 42 at k = 16) in 1–6 ms.
+- A parallel second tier and a "thorough" Simplify without a time limit were considered
+  and dropped: on these numbers they would spend minutes to confirm the first tier. To be
+  looked at again if a real cell is still slow or not shortened.

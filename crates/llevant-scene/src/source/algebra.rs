@@ -194,7 +194,9 @@ pub struct Simp {
 /// The shortest form of `reference` that the laws of Boolean algebra give,
 /// in two tiers: [`tree`] (about one visit of the expression, for any size),
 /// then, only for what is small enough and within `limits`, disjunctive
-/// normal form, all prime implicants, an irredundant cover and factoring.
+/// normal form, all prime implicants, an irredundant cover and factoring,
+/// of the expression and of its complement (negated back: an intersection
+/// of unions).
 /// A form is given only when it is proven equal to `reference` (reduced
 /// ordered BDDs, so it does not rest on the laws being coded right); when
 /// the proof is too large, or the limits stop it, there is no form and
@@ -208,7 +210,7 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
         warnings: Vec::new(),
     };
     let mut stats = Stats::new(limits, MAX_CUBES);
-    let nnf = nnf(reference, false, &mut stats);
+    let normal = nnf(reference, false, &mut stats);
     let mut bdd = Bdd::new(limits);
     let Some(want) = bdd.build(reference) else {
         out.warnings
@@ -217,7 +219,7 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
     };
 
     // Tier 1.
-    let t1 = tree::simplify(&nnf, &mut stats);
+    let t1 = tree::simplify(&normal, &mut stats);
     if t1 == Bool::False {
         if want != FALSE {
             return Err("internal error: an empty form is not proven empty".into());
@@ -228,30 +230,30 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
     }
     let mut forms: Vec<Bool> = vec![t1.clone()];
 
-    // Tier 2, from the first tier's result.
+    // Tier 2, from the first tier's result, as a union of products.
     let mut tier2 = Stats::new(limits, TIER2_CUBES);
-    match dnf(&t1, &mut tier2) {
-        Some(mut cubes) if !cubes.is_empty() && cubes.iter().all(|c| !c.is_empty()) => {
-            primes(&mut cubes, &mut tier2);
-            irredundant(&mut cubes, &mut tier2);
-            forms.push(factor(&cubes, &mut tier2));
-            forms.push(Bool::Or(cubes.iter().map(cube_bool).collect()));
-        }
-        Some(_) => {}
-        None if tier2.stopped => out
-            .warnings
-            .push("stopped before the second tier of simplification was done".into()),
-        None => {}
+    forms.extend(second_tier(&t1, &mut tier2));
+    // And its dual: the complement as a union of products, negated back, so
+    // an intersection of unions (MCNP's usual shape). A cell of m groups
+    // `(a:b)` has 2^m products, its complement m: what explodes one way is
+    // small the other, each under its own cap.
+    let mut dual = Stats::new(limits, TIER2_CUBES);
+    let complement = tree::simplify(&nnf(&t1, true, &mut dual), &mut dual);
+    for g in second_tier(&complement, &mut dual) {
+        forms.push(tree::simplify(&nnf(&g, true, &mut dual), &mut dual));
     }
-    if tier2.stopped {
+    if tier2.stopped || dual.stopped {
         out.warnings
             .push("the time limit stopped the second tier of simplification".into());
     }
-    stats.consensus += tier2.consensus;
-    stats.redundant += tier2.redundant;
-    stats.factored += tier2.factored;
-    stats.distributed += tier2.distributed;
-    stats.absorbed += tier2.absorbed;
+    for s in [&tier2, &dual] {
+        stats.consensus += s.consensus;
+        stats.redundant += s.redundant;
+        stats.factored += s.factored;
+        stats.distributed += s.distributed;
+        stats.absorbed += s.absorbed;
+        stats.contradictions += s.contradictions;
+    }
 
     // The shortest first; the first one proven equal is the answer.
     let mut candidates: Vec<(Expr, usize)> = forms
@@ -294,6 +296,24 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
             .into()
     });
     Ok(out)
+}
+
+/// The second tier on `b` (in negation normal form): its prime implicants,
+/// an irredundant cover of them, factored and as a union of products; none
+/// when its disjunctive normal form is over the cap of `stats`, or `b` is a
+/// constant.
+fn second_tier(b: &Bool, stats: &mut Stats) -> Vec<Bool> {
+    match dnf(b, stats) {
+        Some(mut cubes) if !cubes.is_empty() && cubes.iter().all(|c| !c.is_empty()) => {
+            primes(&mut cubes, stats);
+            irredundant(&mut cubes, stats);
+            vec![
+                factor(&cubes, stats),
+                Bool::Or(cubes.iter().map(cube_bool).collect()),
+            ]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Whether `got` is the same region as `want`, whatever the surfaces are:
@@ -1356,6 +1376,53 @@ mod tests {
         let cut = cut_expr_within(&a, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
         assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
         assert!(cut.terms_after <= cut.terms_before, "{cut:?}");
+    }
+
+    /// `(a:b1)…(a:b9)` and k groups `(c:d)`: as a union of products it has
+    /// over 256 of them (the second tier gives up), but its complement has
+    /// few, and negated back it is `(a : b1 … b9)` and the groups.
+    #[test]
+    fn the_dual_form_shortens_an_intersection_of_unions() {
+        let k = 8;
+        let a = Atom::Surface { id: 1, facet: None };
+        let lit = |id: i64| Bool::Lit(Atom::Surface { id, facet: None }, true);
+        let mut items: Vec<Bool> = (0..9)
+            .map(|j| Bool::Or(vec![Bool::Lit(a, true), lit(10 + j)]))
+            .collect();
+        items.extend((0..k).map(|j| Bool::Or(vec![lit(30 + 2 * j), lit(31 + 2 * j)])));
+        let f = Bool::And(items);
+        let before = 18 + 2 * k as usize;
+        let s = simplify_bool(&f, &Limits::within(Duration::from_secs(20))).unwrap();
+        let e = s.expr.expect("a form");
+        assert_eq!(s.terms, 10 + 2 * k as usize, "{e} (from {before} terms)");
+        let mut nodes = 0;
+        let back = to_bool(&e, None, &mut Vec::new(), &mut nodes).unwrap();
+        assert_eq!(equivalent(&f, &back), Some(true));
+    }
+
+    /// A cell of m groups cut by planes: the first tier's short form stays,
+    /// and the dual does not make it slower.
+    #[test]
+    fn groups_cut_by_planes_stay_short_and_fast() {
+        let m = 12;
+        let mut a = String::new();
+        for k in 0..m {
+            a += &format!("(-{}:-{}) ", 10 + 2 * k, 11 + 2 * k);
+        }
+        let mut b = String::new();
+        for k in 0..16 {
+            b += &format!("{}{} ", if k % 3 == 0 { "-" } else { "" }, 10 + k);
+        }
+        let model = migjorn::Model::parse(&format!(
+            "t\n1 0 {a}1 imp:n=1\n2 0 {b}1 imp:n=1\n\n1 so 5\n\n"
+        ));
+        let ea = model.cell(1).unwrap().geometry_expr().unwrap();
+        let cells = |n: i64| model.cell(n).and_then(|c| c.geometry_expr().ok());
+        let t = std::time::Instant::now();
+        let cut =
+            cut_expr_within(&ea, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+        assert!(cut.terms_after <= 2 * m + 1, "{}", cut.geometry);
     }
 
     #[test]
