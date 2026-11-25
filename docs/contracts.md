@@ -102,10 +102,10 @@ directly or through other cells, and a `LIKE` cut cell are refused
 (`a_cut_that_would_make_cells_complement_each_other_is_refused`,
 `a_like_cell_cannot_be_cut_out_of_another`). The Boolean work looks at the limits at the
 start of a proof, every 1024 steps of it and while absorbing, and gives up a product of
-unions with over four times the cap of products before absorbing it
+unions with over twice the cap of products before absorbing it (absorbing is quadratic), and keeps a product that absorbs below the cap
 (`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one` (a `#n` that cannot be
 expanded is one unknown region on both sides of a proof: equal so is equal; unequal so says
-nothing), `a_cancelled_proof_gives_no_answer`, `a_huge_product_of_unions_is_given_up_at_once`).
+nothing), `a_cancelled_proof_gives_no_answer`, `a_huge_product_of_unions_is_given_up_at_once`, `products_that_absorb_are_kept_whatever_they_are_before`).
 `crates/llevant-scene/tests/cut.rs` compiles the two steps as well: the expansion fixes
 the overlap and changes nothing else, the simplification labels every point as the
 expansion, and a cell that writes `#A` takes in `A ∩ B` (the overlap the viewer's verdict

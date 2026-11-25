@@ -768,7 +768,7 @@ fn absorb(cubes: &mut Vec<Cube>, stats: &mut Stats) -> bool {
 
 /// How many times `max_cubes` the products of one step may be before they
 /// are absorbed.
-const RAW_FACTOR: usize = 4;
+const RAW_FACTOR: usize = 2;
 
 /// Disjunctive normal form of an expression in negation normal form.
 /// `None` when it passes `stats.max_cubes` products, or the limits.
@@ -805,7 +805,8 @@ fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
                     }
                     // The products before absorbing may pass the cap (they
                     // shrink), but not by so much that absorbing them is
-                    // the work the cap is there to stop.
+                    // the work the cap is there to stop (absorbing is
+                    // quadratic: some seconds at 16 000 distinct products).
                     if next.len() > stats.max_cubes * RAW_FACTOR || stats.over() {
                         return None;
                     }
@@ -1503,6 +1504,26 @@ mod tests {
         // Stopped before it began: the tier-1 form, or no form, never a wrong one.
         let s = simplify_bool(&b, &limits);
         assert!(s.is_ok() || s.is_err_and(|e| !e.contains("internal")));
+    }
+
+    /// What absorbs is not lost to the cap on what is written before
+    /// absorbing: 1024 products times a union of five, all but 1024 absorbed
+    /// (5120 before, over the 4096 cap).
+    #[test]
+    fn products_that_absorb_are_kept_whatever_they_are_before() {
+        let lit = |id: i64| Bool::Lit(Atom::Surface { id, facet: None }, true);
+        let mut items = vec![lit(1)];
+        items.extend((0..10).map(|k| Bool::Or(vec![lit(10 + 2 * k), lit(11 + 2 * k)])));
+        items.push(Bool::Or(vec![
+            lit(1),
+            lit(100),
+            lit(101),
+            lit(102),
+            lit(103),
+        ]));
+        let mut stats = Stats::new(&Limits::default(), MAX_CUBES);
+        let cubes = dnf(&Bool::And(items), &mut stats).expect("products that absorb");
+        assert_eq!(cubes.len(), 1024);
     }
 
     /// A proof that creates a handful of nodes still looks at the limits.
