@@ -331,19 +331,24 @@ pub fn same(
     cells: &dyn Fn(i64) -> Option<Expr>,
     limits: &Limits,
 ) -> Option<bool> {
-    let proof = |cells: Option<&dyn Fn(i64) -> Option<Expr>>| -> Option<bool> {
+    let proof = |cells: Option<&dyn Fn(i64) -> Option<Expr>>, lenient: bool| -> Option<bool> {
         if limits.over() {
             return None;
         }
         let (mut n, mut m) = (0, 0);
-        let w = to_bool(want, cells, &mut Vec::new(), &mut n).ok()?;
-        let g = to_bool(got, cells, &mut Vec::new(), &mut m).ok()?;
+        let w = to_bool_with(want, cells, lenient, &mut Vec::new(), &mut n).ok()?;
+        let g = to_bool_with(got, cells, lenient, &mut Vec::new(), &mut m).ok()?;
         let mut bdd = Bdd::new(limits);
         Some(bdd.build(&w)? == bdd.build(&g)?)
     };
-    match proof(None) {
+    match proof(None, false) {
         Some(true) => Some(true),
-        _ => proof(Some(cells)),
+        _ => match proof(Some(cells), false) {
+            Some(r) => Some(r),
+            // A `#n` that cannot be expanded (a `TRCL`) stays an atom on both
+            // sides: equal so is equal, not being equal so says nothing.
+            None => proof(Some(cells), true).filter(|&equal| equal),
+        },
     }
 }
 
@@ -530,7 +535,13 @@ pub fn expand_cut(
     };
     let mut nodes = 0;
     let both = Expr::And(vec![a.clone(), Expr::Complement(b)]);
-    let reference = to_bool(&both, Some(cells), &mut Vec::new(), &mut nodes);
+    let mut reference = to_bool(&both, Some(cells), &mut Vec::new(), &mut nodes);
+    if reference.is_err() && cells(b).is_some() {
+        // Other `#n` of A that cannot be expanded stay as they are, in A and
+        // in what is written: `#b` is expanded all the same.
+        nodes = 0;
+        reference = to_bool_with(&both, Some(cells), true, &mut Vec::new(), &mut nodes);
+    }
     let plain_form = |why: String| {
         let mut e = join(a, &Expr::Complement(b));
         e.plain = true;
@@ -544,9 +555,10 @@ pub fn expand_cut(
     let mut stats = Stats::new(limits, MAX_CUBES);
     // `#b` alone, expanded and with the negation pushed in.
     let mut nodes = 0;
-    let inside = to_bool(
+    let inside = to_bool_with(
         &Expr::Complement(b),
         Some(cells),
+        true,
         &mut Vec::new(),
         &mut nodes,
     )
@@ -598,6 +610,19 @@ pub fn to_bool(
     stack: &mut Vec<i64>,
     nodes: &mut usize,
 ) -> Result<Bool, String> {
+    to_bool_with(e, cells, false, stack, nodes)
+}
+
+/// [`to_bool`]; with `lenient`, a `#n` that `cells` cannot expand stays an
+/// atom (as without `cells`) instead of failing: the same atom wherever it
+/// is, so a proof of equality made with it holds for any region it stands for.
+fn to_bool_with(
+    e: &Expr,
+    cells: Option<&dyn Fn(i64) -> Option<Expr>>,
+    lenient: bool,
+    stack: &mut Vec<i64>,
+    nodes: &mut usize,
+) -> Result<Bool, String> {
     *nodes += 1;
     if *nodes > MAX_NODES {
         return Err("the cells complemented are too large".into());
@@ -613,23 +638,29 @@ pub fn to_bool(
                 if stack.len() >= MAX_DEPTH {
                     return Err("the complements are nested too deep".into());
                 }
-                let inner = cells(*n)
-                    .ok_or_else(|| format!("cell {n} cannot be expanded (TRCL, LIKE or absent)"))?;
+                let Some(inner) = cells(*n) else {
+                    if lenient {
+                        return Ok(Bool::Lit(Atom::Cell(*n), true));
+                    }
+                    return Err(format!(
+                        "cell {n} cannot be expanded (TRCL, LIKE or absent)"
+                    ));
+                };
                 stack.push(*n);
-                let b = to_bool(&inner, Some(cells), stack, nodes)?;
+                let b = to_bool_with(&inner, Some(cells), lenient, stack, nodes)?;
                 stack.pop();
                 Bool::Not(Box::new(b))
             }
         },
-        Expr::Not(x) => Bool::Not(Box::new(to_bool(x, cells, stack, nodes)?)),
+        Expr::Not(x) => Bool::Not(Box::new(to_bool_with(x, cells, lenient, stack, nodes)?)),
         Expr::And(v) => Bool::And(
             v.iter()
-                .map(|x| to_bool(x, cells, stack, nodes))
+                .map(|x| to_bool_with(x, cells, lenient, stack, nodes))
                 .collect::<Result<_, _>>()?,
         ),
         Expr::Or(v) => Bool::Or(
             v.iter()
-                .map(|x| to_bool(x, cells, stack, nodes))
+                .map(|x| to_bool_with(x, cells, lenient, stack, nodes))
                 .collect::<Result<_, _>>()?,
         ),
     })

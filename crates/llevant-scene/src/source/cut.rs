@@ -671,6 +671,27 @@ mod tests {
     }
 
     #[test]
+    fn a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one() {
+        // Cell 3 has a TRCL, so `#3` stays as it is; `#2` is still expanded.
+        let s = Source::from_str(
+            "t\n1 0 -1 #3 imp:n=1\n2 0 -2 imp:n=1\n3 0 -3 imp:n=1 trcl=(1 0 0)\n\n\
+             1 so 5\n2 sx 4 5\n3 so 3\n\n",
+        );
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        assert!(!e.plain, "{:?}", e.warnings);
+        assert_eq!(e.geometry, "-1 #3 2");
+        assert_eq!(e.new_card.trim_end(), "1 0 -1 #3 2 imp:n=1");
+        // The cut cell itself with a TRCL: `#2` as it is.
+        let s = Source::from_str(
+            "t\n1 0 -1 #3 imp:n=1\n2 0 -2 imp:n=1 trcl=(1 0 0)\n3 0 -3 imp:n=1\n\n\
+             1 so 5\n2 sx 4 5\n3 so 3\n\n",
+        );
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        assert!(e.plain);
+        assert_eq!(e.geometry, "-1 #3 #2");
+    }
+
+    #[test]
     fn a_stale_plan_is_refused() {
         let s = Source::from_str(INPUT);
         let first = s.cut_plan(1, 2, false).unwrap();

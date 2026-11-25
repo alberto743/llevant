@@ -89,8 +89,9 @@ Release build, 6 cores. Cell A has m groups `(a:b)`; cell B has 16 planes.
   by `#B` already, cells in different universes (as their `u=` say), and a `cut` that writes
   `#keep`, directly or through other cells (the two would complement each other). A `cut`
   with a `TRCL` is written as `#B`.
-- `#B` is expanded only if every `#n` in A can be expanded too; with a `#n` of a cell that has
-  a `TRCL`, the plain `A #B` is written (correct, not the shortest).
+- Only `#B` has to be expandable. Another `#n` of A that is not (a cell with a `TRCL`) stays
+  as written, and the proof treats it as the same unknown region on both sides, so
+  `-1 #3` cut by `-2` is `-1 #3 2` (`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one`).
 - A plan is bound to the input revision it was made at; any edit before Apply makes a new
   preview necessary. The verdict counts only a check that looked where A and B can overlap.
 - A cell that writes `#keep` is named before Apply, and after it if it overlaps B. It is
