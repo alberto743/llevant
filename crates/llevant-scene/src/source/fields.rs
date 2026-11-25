@@ -671,8 +671,13 @@ fn width(s: &str) -> usize {
 /// blank. Each piece says whether a blank comes before it.
 fn pieces(code: &str) -> Vec<(&str, bool)> {
     let mut out = Vec::new();
+    // The geometry ends where the first keyword (`imp:n=1`, `fill=`…) is:
+    // after it a `0:0` is a range of a lattice's `fill`, whole.
+    let mut in_geometry = true;
     for word in code.split_whitespace() {
-        let geometry = word.chars().all(|c| "0123456789+-.:()#".contains(c));
+        let only = word.chars().all(|c| "0123456789+-.:()#".contains(c));
+        in_geometry &= only;
+        let geometry = in_geometry;
         let mut start = 0;
         let mut blank = true;
         if geometry {
@@ -1111,6 +1116,23 @@ m2 1001 2
         let w = wrap_long_lines(&card);
         assert!(fits(&w), "{w}");
         assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{w}");
+    }
+
+    #[test]
+    fn a_fill_range_is_never_broken_at_its_colon() {
+        // The geometry is moved by one column at a time, so a break falls on
+        // every place of the ranges that fit one.
+        let tail = "fill=0:0 0:1 -1:1 1 2 3 4 5 6";
+        for n in 20..40 {
+            let card = format!("1 0 {} u=1 lat=1 {tail}\n", vec!["-1 2"; n].join(" "));
+            let w = wrap_long_lines(&card);
+            assert!(fits(&w), "{n}:\n{w}");
+            let words = |t: &str| t.split_whitespace().map(String::from).collect::<Vec<_>>();
+            for r in ["fill=0:0", "0:1", "-1:1"] {
+                assert!(words(&w).contains(&r.to_string()), "{n}: {r} broken:\n{w}");
+            }
+            assert_eq!(words(&w), words(&card), "{n}:\n{w}");
+        }
     }
 
     #[test]

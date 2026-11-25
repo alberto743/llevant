@@ -131,7 +131,13 @@ impl ViewerApp {
                 Command::CutAccept(s) => self.cut_accept(s, ctx),
                 Command::RevertCut => {
                     // Only a cut written, and nothing written after it (the
-                    // flow is closed by any other edit), is taken back.
+                    // flow is closed by any other edit), is taken back. Not
+                    // while an edit cannot start (a save is under way): the
+                    // cut stays open, to be reverted when it can.
+                    if let Some(why) = self.edit_blocked() {
+                        self.refuse_edit(&format!("cannot revert now: {why}"));
+                        continue;
+                    }
                     let written = self.doc.as_mut().and_then(|d| {
                         let f = d.cut_flow.take()?;
                         f.stop();

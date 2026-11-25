@@ -204,6 +204,17 @@ fn verdict(doc: &Document, f: &CutFlow, plan: &CutExpand, check_before: u64) -> 
     let (Some(a), Some(b)) = (m.cell_index(f.keep), m.cell_index(f.cut)) else {
         return Verdict::NotChecked;
     };
+    // A check that did not look where the two cells can overlap says nothing
+    // of the cut (one of a region elsewhere, started from the panels).
+    let problem = m.bounds(llevant::Scope::Problem);
+    let together = m
+        .cell(a)
+        .bbox
+        .intersect(&m.cell(b).bbox)
+        .intersect(&problem);
+    if !together.is_empty() && !run.covers(&together) {
+        return Verdict::NotChecked;
+    }
     let v = &run.volumes;
     let groups: Vec<&[u32]> = v
         .problems()
@@ -305,8 +316,9 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
         Verdict::NotChecked => {
             ui.label(
                 egui::RichText::new(
-                    "The check did not run (the model is not complete): check from the \
-                     Problems panel to see whether the overlap is solved.",
+                    "No check of the place where the two cells meet has run since the cut \
+                     (the model may not be complete, or the check was of another region): \
+                     check from the Problems panel to see whether the overlap is solved.",
                 )
                 .weak(),
             );

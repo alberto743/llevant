@@ -332,6 +332,9 @@ pub fn same(
     limits: &Limits,
 ) -> Option<bool> {
     let proof = |cells: Option<&dyn Fn(i64) -> Option<Expr>>| -> Option<bool> {
+        if limits.over() {
+            return None;
+        }
         let (mut n, mut m) = (0, 0);
         let w = to_bool(want, cells, &mut Vec::new(), &mut n).ok()?;
         let g = to_bool(got, cells, &mut Vec::new(), &mut m).ok()?;
@@ -714,18 +717,27 @@ fn contains(a: &Cube, b: &Cube) -> bool {
 }
 
 /// Idempotence and absorption (`x + xy = x`): no cube kept holds another.
-fn absorb(cubes: &mut Vec<Cube>, stats: &mut Stats) {
+/// `false` if the limits stopped it (the cubes are then left as they were).
+fn absorb(cubes: &mut Vec<Cube>, stats: &mut Stats) -> bool {
     cubes.sort_by_key(|c| c.len());
     let before = cubes.len();
     let mut kept: Vec<Cube> = Vec::new();
-    for c in cubes.drain(..) {
-        if !kept.iter().any(|k| contains(&c, k)) {
-            kept.push(c);
+    for (i, c) in cubes.iter().enumerate() {
+        if i % 64 == 0 && stats.over() {
+            return false;
+        }
+        if !kept.iter().any(|k| contains(c, k)) {
+            kept.push(c.clone());
         }
     }
     stats.absorbed += before - kept.len();
     *cubes = kept;
+    true
 }
+
+/// How many times `max_cubes` the products of one step may be before they
+/// are absorbed.
+const RAW_FACTOR: usize = 4;
 
 /// Disjunctive normal form of an expression in negation normal form.
 /// `None` when it passes `stats.max_cubes` products, or the limits.
@@ -760,11 +772,19 @@ fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
                             None => stats.contradictions += 1,
                         }
                     }
+                    // The products before absorbing may pass the cap (they
+                    // shrink), but not by so much that absorbing them is
+                    // the work the cap is there to stop.
+                    if next.len() > stats.max_cubes * RAW_FACTOR || stats.over() {
+                        return None;
+                    }
                 }
                 if acc.len() > 1 || part.len() > 1 {
                     stats.distributed += 1;
                 }
-                absorb(&mut next, stats);
+                if !absorb(&mut next, stats) {
+                    return None;
+                }
                 if next.len() > stats.max_cubes {
                     return None;
                 }
@@ -773,7 +793,9 @@ fn dnf(b: &Bool, stats: &mut Stats) -> Option<Vec<Cube>> {
             acc
         }
     };
-    absorb(&mut cubes, stats);
+    if !absorb(&mut cubes, stats) {
+        return None;
+    }
     Some(cubes)
 }
 
@@ -965,6 +987,8 @@ struct Bdd {
     cache: HashMap<(u32, u32, u32), u32>,
     vars: BTreeMap<Atom, u32>,
     limits: Limits,
+    /// Calls of `ite` that did work (the limits are looked at every so many).
+    steps: u32,
 }
 
 impl Bdd {
@@ -975,6 +999,7 @@ impl Bdd {
             cache: HashMap::new(),
             vars: BTreeMap::new(),
             limits: limits.clone(),
+            steps: 0,
         }
     }
 
@@ -1025,6 +1050,10 @@ impl Bdd {
         }
         if let Some(&r) = self.cache.get(&(f, g, h)) {
             return Some(r);
+        }
+        self.steps = self.steps.wrapping_add(1);
+        if self.steps.is_multiple_of(1024) && self.limits.over() {
+            return None;
         }
         let v = self.var_of(f).min(self.var_of(g)).min(self.var_of(h));
         let (f0, f1) = self.cofactors(f, v);
@@ -1443,5 +1472,31 @@ mod tests {
         // Stopped before it began: the tier-1 form, or no form, never a wrong one.
         let s = simplify_bool(&b, &limits);
         assert!(s.is_ok() || s.is_err_and(|e| !e.contains("internal")));
+    }
+
+    /// A proof that creates a handful of nodes still looks at the limits.
+    #[test]
+    fn a_cancelled_proof_gives_no_answer() {
+        let stop = Arc::new(AtomicBool::new(true));
+        let limits = Limits {
+            until: None,
+            cancel: Some(stop),
+        };
+        let e = parse("-1 2");
+        assert_eq!(same(&e, &e, &|_| None, &limits), None);
+        assert_eq!(same(&e, &e, &|_| None, &Limits::default()), Some(true));
+    }
+
+    /// Two unions of 256 atoms each, with none shared, are 65 536 products:
+    /// the second tier gives up before absorbing them, at once.
+    #[test]
+    fn a_huge_product_of_unions_is_given_up_at_once() {
+        let lit = |id: i64| Bool::Lit(Atom::Surface { id, facet: None }, true);
+        let union = |from: i64| Bool::Or((from..from + 256).map(lit).collect());
+        let f = Bool::And(vec![union(1), union(1000)]);
+        let t = std::time::Instant::now();
+        let mut stats = Stats::new(&Limits::default(), MAX_CUBES);
+        assert!(dnf(&f, &mut stats).is_none());
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
     }
 }

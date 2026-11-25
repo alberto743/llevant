@@ -186,6 +186,17 @@ impl Source {
         tree
     }
 
+    /// The tree to write if the revision is still `revision` (the lock held
+    /// from the check to the write), else `None`.
+    fn tree_mut_at(&self, revision: u64) -> Option<RwLockWriteGuard<'_, migjorn::Model>> {
+        let tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        if self.revision.load(Ordering::Relaxed) != revision {
+            return None;
+        }
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        Some(tree)
+    }
+
     /// A number that changes whenever the input may have: equal revisions,
     /// the same text (what a frontend caches something computed from the
     /// cards by).
@@ -259,6 +270,19 @@ impl Source {
     /// file is not in the input), when `text` does not read as a card of
     /// that kind, or when a line is over [`MAX_COLUMNS`].
     pub fn edit(&self, kind: CardKind, id: i64, text: &str) -> std::result::Result<Edited, String> {
+        self.edit_at(kind, id, text, None)
+    }
+
+    /// [`Source::edit`], written only if the input is still as it was at
+    /// `revision` ([`Source::revision`]), the check made under the lock that
+    /// writes: an error, changing nothing, if it has changed.
+    pub(crate) fn edit_at(
+        &self,
+        kind: CardKind,
+        id: i64,
+        text: &str,
+        revision: Option<u64>,
+    ) -> std::result::Result<Edited, String> {
         let what = format!("{} {id}", kind.name());
         if let Some((n, line)) = text
             .lines()
@@ -271,7 +295,12 @@ impl Source {
                 line.chars().count()
             ));
         }
-        let mut tree = self.tree_mut();
+        let mut tree = match revision {
+            None => self.tree_mut(),
+            Some(r) => self.tree_mut_at(r).ok_or_else(|| {
+                format!("{what} has changed since the cut was planned: plan it again")
+            })?,
+        };
         let (slot, old) = find(&tree, kind, id)
             .ok_or_else(|| format!("{what} is not in the input (in a READ file?)"))?;
         let mut text = text.to_string();

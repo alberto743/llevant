@@ -147,7 +147,29 @@ pub struct CheckRun {
     pub volumes: Volumes,
     /// What the region is (for the panel).
     pub scope: String,
+    /// Where it looked: the boxes it was limited to, else its region.
+    pub covered: Vec<Aabb>,
     pub seconds: f64,
+}
+
+impl CheckRun {
+    /// Whether one box it looked in holds all of `b` (an overlap there is
+    /// found if it is: the check may say nothing of a place it did not
+    /// look at).
+    pub fn covers(&self, b: &Aabb) -> bool {
+        covered_by(&self.covered, b)
+    }
+}
+
+/// Whether one of `boxes` holds all of `b`, up to rounding.
+fn covered_by(boxes: &[Aabb], b: &Aabb) -> bool {
+    let tol = 1e-9;
+    boxes.iter().any(|c| {
+        (0..3).all(|i| {
+            let slack = tol * (1.0 + c.lo[i].abs().max(c.hi[i].abs()));
+            c.lo[i] - slack <= b.lo[i] && b.hi[i] <= c.hi[i] + slack
+        })
+    })
 }
 
 /// Cells points can end in: not filled, or a lattice some of whose
@@ -420,6 +442,10 @@ impl Job {
         let task = Task::run("check", wake, move |p| {
             let start = Instant::now();
             let grid = VolumeGrid::new(region, h);
+            let covered = match &within {
+                Some(b) => b.to_vec(),
+                None => vec![region],
+            };
             let volumes = match &within {
                 Some(b) => m.volumes_within(&grid, b, Some(p)),
                 None => m.volumes(&grid, Some(p)),
@@ -428,6 +454,7 @@ impl Job {
                 Ok(volumes) => Outcome::Check(CheckRun {
                     volumes,
                     scope,
+                    covered,
                     seconds: start.elapsed().as_secs_f64(),
                 }),
                 Err(e) => Outcome::Failed(e.to_string()),
@@ -621,5 +648,26 @@ mod tests {
         };
         let run = measure(&m, &spec, &Progress::new(), |_| panic!("partial")).unwrap();
         assert!(run.instances.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn a_check_covers_what_one_of_its_boxes_holds() {
+        let b = |lo: f64, hi: f64| Aabb {
+            lo: [lo; 3],
+            hi: [hi; 3],
+        };
+        let boxes = [b(0.0, 10.0), b(20.0, 30.0)];
+        assert!(covered_by(&boxes, &b(1.0, 9.0)));
+        assert!(covered_by(&boxes, &b(20.0, 30.0)));
+        assert!(
+            !covered_by(&boxes, &b(5.0, 25.0)),
+            "half in each is in neither"
+        );
+        assert!(!covered_by(&boxes, &b(40.0, 50.0)));
     }
 }

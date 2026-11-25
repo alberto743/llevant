@@ -51,14 +51,15 @@ impl ViewerApp {
             f.phase = crate::cutflow::Phase::Applying(plan.clone());
         }
         let said = what.clone();
-        self.start_change(ctx, what, Some(select), move |source| {
+        let started = self.start_change(ctx, what, Some(select), move |source| {
             let mut change = input_edits::Change::one(plan.keep, source.apply_expand(&plan)?);
             change.what = said;
             Ok(change)
         });
         // Not started (an edit is under way, or refused): the cut is closed,
-        // and what was said is in the messages.
-        if self.loading.is_none() {
+        // and what was said is in the messages. Only the edit this started
+        // may take the cut to the next step.
+        if !started {
             if let Some(d) = &mut self.doc {
                 d.cut_flow = None;
             }
@@ -204,6 +205,8 @@ impl ViewerApp {
 
     /// Make the change `make` gives in the input and compile it against the
     /// model shown, keeping the view; `select` selected once it lands.
+    /// Whether it was started (not when an edit is under way, or the
+    /// input is not there to edit: what was refused is said in the messages).
     pub(super) fn start_change(
         &mut self,
         ctx: &egui::Context,
@@ -212,13 +215,13 @@ impl ViewerApp {
         make: impl FnOnce(&llevant_scene::source::Source) -> Result<input_edits::Change, String>
             + Send
             + 'static,
-    ) {
+    ) -> bool {
         if let Some(why) = self.edit_blocked() {
             self.refuse_edit(&format!("cannot edit now: {why}"));
-            return;
+            return false;
         }
         let (Some(_), Some(source)) = (&self.doc, self.source.clone()) else {
-            return;
+            return false;
         };
         self.select_after = select;
         self.start_edit(ctx, source, move |source| {
@@ -228,6 +231,7 @@ impl ViewerApp {
             d.messages
                 .progress(format!("editing {what}: building only what changed…"));
         }
+        true
     }
 
     /// Move surface `id` to `coeffs`, previewed live: the drag begun if

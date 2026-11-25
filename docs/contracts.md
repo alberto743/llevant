@@ -93,7 +93,17 @@ under a time limit and a cancel flag (`Limits`)
 `groups_cut_by_planes_stay_short_and_fast`). The shortest form is given only when
 the BDDs prove it equal; the proof or the limits failing gives no form. A cut of 14 groups
 by 16 planes, which took seconds in the normal-form path, is done at once (`algebra.rs`
-tests). `apply_card` refuses a plan made when the card was not as it is now.
+tests). Every plan carries the `Source::revision` it was made at: planning fails if the input changed
+while it ran, and `apply_card` writes only if the revision is still that one, the check made
+under the lock that writes, so an edit of any card the plan was proven from (the cut cell's,
+a `#n` it expanded) refuses it too (`a_plan_is_refused_when_a_cell_it_was_proven_from_changed`,
+`a_stale_plan_is_refused`). A cut that would make the two cells write each other's complement,
+directly or through other cells, and a `LIKE` cut cell are refused
+(`a_cut_that_would_make_cells_complement_each_other_is_refused`,
+`a_like_cell_cannot_be_cut_out_of_another`). The Boolean work looks at the limits at the
+start of a proof, every 1024 steps of it and while absorbing, and gives up a product of
+unions with over four times the cap of products before absorbing it
+(`a_cancelled_proof_gives_no_answer`, `a_huge_product_of_unions_is_given_up_at_once`).
 `crates/llevant-scene/tests/cut.rs` compiles the two steps as well: the expansion fixes
 the overlap and changes nothing else, the simplification labels every point as the
 expansion, and a cell that writes `#A` takes in `A ∩ B` (the overlap the viewer's verdict
@@ -128,9 +138,12 @@ byte). A geometry with as many terms keeps the card's line breaks; any other is
 written again within 128 columns (`geometry_written_term_by_term`). `wrap_long_lines`
 breaks a line over 128 columns between words, or inside a word of geometry before a `:`
 or a `)` and after a `(` (a union printed without blanks, as the expansion of a `#n`),
-never inside a number or a keyword, counting characters, not bytes. A `$` comment stays
+never inside a number or a keyword (nor in what follows the first keyword: a `fill=` range
+`0:0` stays whole, `a_fill_range_is_never_broken_at_its_colon`), counting characters, not bytes. A `$` comment stays
 at the end of the last line, with a word moved down to make room, or else becomes `c`
-lines after it, all of its text kept. Every line it writes fits, and the card reads back
+lines after it (so a `$ label` can stop selecting the cell), all of its text kept. Every line
+it writes fits, except a comment line that was too long already and a piece that cannot be
+broken (a word longer than a line), which are left as they are; and the card reads back
 the same geometry and parameters (`a_union_without_spaces_is_broken_at_its_colons`,
 `a_comment_is_kept_and_the_lines_still_fit`, `non_ascii_lines_are_wrapped_by_characters`,
 and 300 random long cards in `random_long_cards_fit_and_read_back_the_same`; a cut by a

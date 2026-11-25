@@ -85,9 +85,14 @@ Release build, 6 cores. Cell A has m groups `(a:b)`; cell B has 16 planes.
 - Once `#B` is written out, cell A no longer follows later edits of cell B. The same holds
   for any other `#n` that Simplify expands; when the kept form is as short, it is kept.
 - Refused: a `keep` with a `TRCL` (MCNP moves a `#n` by the cell's own `TRCL`), a `LIKE`
-  cell, a `keep` that a `LIKE` cell copies (it would be cut too), a `keep` cut by `#B`
-  already, and cells in different universes (as their `u=` say). A `cut` with a `TRCL` is
-  written as `#B`.
+  cell or a LIKE `cut`, a `keep` that a `LIKE` cell copies (it would be cut too), a `keep` cut
+  by `#B` already, cells in different universes (as their `u=` say), and a `cut` that writes
+  `#keep`, directly or through other cells (the two would complement each other). A `cut`
+  with a `TRCL` is written as `#B`.
+- `#B` is expanded only if every `#n` in A can be expanded too; with a `#n` of a cell that has
+  a `TRCL`, the plain `A #B` is written (correct, not the shortest).
+- A plan is bound to the input revision it was made at; any edit before Apply makes a new
+  preview necessary. The verdict counts only a check that looked where A and B can overlap.
 - A cell that writes `#keep` is named before Apply, and after it if it overlaps B. It is
   never changed.
 - A geometry rewritten loses the comments inside it.

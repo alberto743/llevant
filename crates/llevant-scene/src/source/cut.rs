@@ -19,6 +19,9 @@ pub struct CutPlan {
     pub cut: i64,
     /// The card of `keep` as it is.
     pub old_card: String,
+    /// [`Source::revision`] when it was planned: a plan is written only if
+    /// the input has not changed since (what it was proven from included).
+    pub revision: u64,
     /// The card of `keep` after the cut (as `old_card` if there is nothing
     /// to write: see [`Cut::empty`]).
     pub new_card: String,
@@ -37,6 +40,8 @@ pub struct CutExpand {
     pub cut: i64,
     /// The card of `keep` as it is.
     pub old_card: String,
+    /// [`Source::revision`] when it was planned (see [`CutPlan::revision`]).
+    pub revision: u64,
     /// The card with `#cut` added to the geometry as it is written, and the
     /// range of it that is new (for the first look: before expanding).
     pub plain_geometry: String,
@@ -63,6 +68,8 @@ pub struct CutExpand {
 pub struct Simplified {
     pub keep: i64,
     pub old_card: String,
+    /// [`Source::revision`] when it was planned (see [`CutPlan::revision`]).
+    pub revision: u64,
     /// The card with the shorter geometry (as `old_card` if none is).
     pub new_card: String,
     /// Terms (surfaces and `#n`) before and after.
@@ -90,6 +97,10 @@ impl Source {
             .ok_or_else(|| format!("no cell {cut} in the input"))?;
         if f.like.is_some() {
             return Err(format!("cell {keep} is a LIKE cell: cut it by hand"));
+        }
+        if g.like.is_some() {
+            // It takes its universe (and more) from the cell it copies.
+            return Err(format!("cell {cut} is a LIKE cell: cut by hand"));
         }
         if f.params.iter().any(|p| p.key == "trcl") {
             return Err(format!(
@@ -140,6 +151,12 @@ impl Source {
                 users.push(n);
             }
         }
+        if let Some(via) = reaches(&tree, cut, keep) {
+            return Err(format!(
+                "cell {cut} depends on #{keep} (through cell {via}): writing #{cut} in cell \
+                 {keep} would make them complement each other"
+            ));
+        }
         Ok((old_card, a, users))
     }
 
@@ -169,6 +186,7 @@ impl Source {
     /// it will be read back, or `#cut` is written as it is. The refusals are
     /// those of [`Source::cut_plan`].
     pub fn cut_expand(&self, keep: i64, cut: i64, limits: &Limits) -> Result<CutExpand, String> {
+        let revision = self.revision();
         let (old_card, a, users) = self.cut_checks(keep, cut)?;
         let e = {
             let tree = self.tree();
@@ -178,6 +196,7 @@ impl Source {
             keep,
             cut,
             old_card: old_card.clone(),
+            revision,
             plain_geometry: e.plain_geometry,
             plain_mark: e.plain_mark,
             new_card: old_card.clone(),
@@ -190,7 +209,7 @@ impl Source {
         };
         plan.warnings.extend(Self::user_warnings(keep, cut, &users));
         if plan.empty {
-            return Ok(plan);
+            return self.unchanged_since(revision).map(|()| plan);
         }
         let want = Expr::And(vec![a, Expr::Complement(cut)]);
         plan.new_card = self.cell_with(keep, &[CellChange::Geometry(plan.geometry.clone())])?;
@@ -211,6 +230,7 @@ impl Source {
                     self.cell_with(keep, &[CellChange::Geometry(plan.geometry.clone())])?;
             }
         }
+        self.unchanged_since(revision)?;
         Ok(plan)
     }
 
@@ -220,6 +240,7 @@ impl Source {
     /// is as short, else expanded (`algebra::shortest`). `limits` stop
     /// the long work; nothing is written (see [`Source::apply_simplified`]).
     pub fn cell_simplify(&self, keep: i64, limits: &Limits) -> Result<Simplified, String> {
+        let revision = self.revision();
         let old_card = self
             .card(CardKind::Cell, keep)
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
@@ -247,6 +268,7 @@ impl Source {
         let mut r = Simplified {
             keep,
             old_card: old_card.clone(),
+            revision,
             new_card: old_card,
             terms_before,
             terms_after: terms_before,
@@ -257,7 +279,7 @@ impl Source {
         if s.empty {
             r.warnings
                 .push("the geometry is empty: nothing to simplify".into());
-            return Ok(r);
+            return self.unchanged_since(revision).map(|()| r);
         }
         match s.expr {
             Some(e) if s.terms < terms_before => {
@@ -281,20 +303,26 @@ impl Source {
                 .push("the geometry is as short as the algebra gets".into()),
             None => {}
         }
+        self.unchanged_since(revision)?;
         Ok(r)
     }
 
-    /// Writes the card `new_card` of cell `keep`, planned when its card was
-    /// `old_card` (undone with [`Source::restore`]). An error if the card
-    /// is not `old_card` now (plan again).
-    pub fn apply_card(&self, keep: i64, old_card: &str, new_card: &str) -> Result<Edited, String> {
-        let now = self.card(CardKind::Cell, keep).map(|c| c.text);
-        if now.as_deref() != Some(old_card) {
-            return Err(format!(
-                "cell {keep} has changed since the cut was planned: plan it again"
-            ));
+    /// An error if the input has changed since `revision`: a plan made
+    /// from cards read at different times is not one.
+    fn unchanged_since(&self, revision: u64) -> Result<(), String> {
+        if self.revision() == revision {
+            Ok(())
+        } else {
+            Err("the input changed while the cut was planned: plan it again".into())
         }
-        self.edit(CardKind::Cell, keep, new_card)
+    }
+
+    /// Writes the card `new_card` of cell `keep`, planned when the input was
+    /// at `revision` (undone with [`Source::restore`]). An error, changing
+    /// nothing, if anything in the input has changed since (plan again): the
+    /// geometry a plan was proven from is in other cards too.
+    pub fn apply_card(&self, keep: i64, revision: u64, new_card: &str) -> Result<Edited, String> {
+        self.edit_at(CardKind::Cell, keep, new_card, Some(revision))
     }
 
     /// Writes an expansion made by [`Source::cut_expand`].
@@ -305,7 +333,7 @@ impl Source {
                 plan.keep, plan.cut
             ));
         }
-        self.apply_card(plan.keep, &plan.old_card, &plan.new_card)
+        self.apply_card(plan.keep, plan.revision, &plan.new_card)
     }
 
     /// Writes a simplification made by [`Source::cell_simplify`].
@@ -313,7 +341,7 @@ impl Source {
         if !s.simplified {
             return Err("nothing shorter to write".into());
         }
-        self.apply_card(s.keep, &s.old_card, &s.new_card)
+        self.apply_card(s.keep, s.revision, &s.new_card)
     }
 
     /// What cutting cell `cut` out of cell `keep` gives, in one step: its
@@ -331,6 +359,7 @@ impl Source {
     /// cannot be expanded, is written as `#n` and not simplified. A warning
     /// for each cell that writes `#keep`: it then takes in what is cut.
     pub fn cut_plan(&self, keep: i64, cut: i64, simplify: bool) -> Result<CutPlan, String> {
+        let revision = self.revision();
         let (old_card, a, users) = self.cut_checks(keep, cut)?;
         let mut result = if simplify {
             let tree = self.tree();
@@ -367,10 +396,12 @@ impl Source {
                 }
             }
         }
+        self.unchanged_since(revision)?;
         Ok(CutPlan {
             keep,
             cut,
             old_card,
+            revision,
             new_card,
             result,
         })
@@ -387,7 +418,7 @@ impl Source {
                 plan.keep, plan.cut
             ));
         }
-        self.apply_card(plan.keep, &plan.old_card, &plan.new_card)
+        self.apply_card(plan.keep, plan.revision, &plan.new_card)
     }
 }
 
@@ -402,6 +433,28 @@ fn card_geometry(card: &str, keep: i64) -> Result<Expr, String> {
         .ok_or_else(|| format!("cell {keep}: the card does not read back"))?
         .geometry_expr()
         .map_err(|e| format!("cell {keep}: {}", e.message))
+}
+
+/// The first cell, from `from` on through the cells each writes `#n` of,
+/// that writes `#target` (`from` itself counts): the cell that would make
+/// `target` and `from` complement each other.
+fn reaches(tree: &migjorn::Model, from: i64, target: i64) -> Option<i64> {
+    let mut seen = vec![from];
+    let mut todo = vec![from];
+    while let Some(n) = todo.pop() {
+        let Some(c) = tree.cell(n) else { continue };
+        for w in geometry_words(&c.geometry_text()) {
+            let Word::Cell(m) = w.kind else { continue };
+            if m == target {
+                return Some(n);
+            }
+            if !seen.contains(&m) {
+                seen.push(m);
+                todo.push(m);
+            }
+        }
+    }
+    None
 }
 
 /// The geometry of cell `n` for a `#n` to expand through: its own, with no
@@ -520,6 +573,47 @@ mod tests {
         let p = s.cut_plan(2, 3, true).unwrap();
         assert!(!p.result.simplified);
         assert_eq!(p.new_card.trim_end(), "2 0 (-2:-4) 3 #3 imp:n=1");
+    }
+
+    #[test]
+    fn a_cut_that_would_make_cells_complement_each_other_is_refused() {
+        // Direct: cell 2 writes #1.
+        let s = Source::from_str("t\n1 0 -1 imp:n=1\n2 0 #1 : -2 imp:n=1\n\n1 so 5\n2 so 9\n\n");
+        let err = s.cut_plan(1, 2, true).unwrap_err();
+        assert!(err.contains("complement each other"), "{err}");
+        assert!(s.cut_expand(1, 2, &Limits::default()).is_err());
+        // Indirect: cell 2 writes #3, cell 3 writes #1.
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 #3 -2 imp:n=1\n3 0 #1 -3 imp:n=1\n\n1 so 5\n2 so 9\n3 so 7\n\n",
+        );
+        assert!(s.cut_plan(1, 2, false).is_err());
+        // Cell 2 writes #3, which does not write #1: fine.
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 #3 -2 imp:n=1\n3 0 -3 imp:n=1\n\n1 so 5\n2 so 9\n3 so 7\n\n",
+        );
+        assert!(s.cut_plan(1, 2, false).is_ok());
+    }
+
+    #[test]
+    fn a_like_cell_cannot_be_cut_out_of_another() {
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 like 3 but imp:n=2\n3 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n\n",
+        );
+        let err = s.cut_plan(1, 2, true).unwrap_err();
+        assert!(err.contains("cell 2 is a LIKE cell"), "{err}");
+    }
+
+    #[test]
+    fn a_plan_is_refused_when_a_cell_it_was_proven_from_changed() {
+        // Cell 2 is edited after the plan: cell 1's card is as it was.
+        let s = Source::from_str(INPUT);
+        let plan = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        let card = s.card(CardKind::Cell, 2).unwrap().text;
+        s.edit(CardKind::Cell, 2, &card.replace("-1", "-3"))
+            .unwrap();
+        let err = s.apply_expand(&plan).unwrap_err();
+        assert!(err.contains("changed since"), "{err}");
+        assert_eq!(s.card(CardKind::Cell, 1).unwrap().text, plan.old_card);
     }
 
     #[test]

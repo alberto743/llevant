@@ -145,18 +145,19 @@ fn a_cell_writing_the_complement_of_the_cut_one_may_overlap_after() {
     assert!(after.contains(&Err(Status::Overlap)));
 }
 
-/// A cell with a union and a nested complement: the algebra shortens it and
-/// the model still labels every point as with the plain cut.
+/// A cell with a union that the algebra does shorten (`(-1:-2) 3` outside
+/// `-1 3` is `-2 3 1`): the model still labels every point as with the
+/// plain cut.
 #[test]
 fn a_shortened_cut_labels_every_point_as_the_plain_one() {
     const DECK: &str = "union
-1 0 -1 : -2 imp:n=1
-2 0 -1 -3 imp:n=1
+1 0 (-1:-2) 3 imp:n=1
+2 0 -1 3 imp:n=1
 3 0 #2 #1 -4 imp:n=0
 4 0 4 imp:n=0
 
 1 so 5
-2 sx 4 5
+2 so 9
 3 px 0
 4 so 50
 
@@ -168,6 +169,9 @@ fn a_shortened_cut_labels_every_point_as_the_plain_one() {
     let simple = b.cut_plan(1, 2, true).unwrap();
     a.apply_cut(&plain).unwrap();
     b.apply_cut(&simple).unwrap();
-    assert!(simple.result.terms_after <= plain.result.terms_after);
+    // The shortening is the point: a plain card compared with itself would
+    // pass this test without the algebra having done anything.
+    assert!(simple.result.simplified, "{:?}", simple.result);
+    assert!(simple.result.terms_after < plain.result.terms_after);
     assert_eq!(who(&a.to_source(), &pts), who(&b.to_source(), &pts));
 }
