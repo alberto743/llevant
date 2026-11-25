@@ -1338,6 +1338,68 @@ fn a_cut_is_proposed_applied_verified_and_simplified() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A cut applied while another edit is being made is refused and closed:
+/// it must not be taken for written when that edit lands (Revert would then
+/// undo the other edit).
+#[test]
+fn a_cut_applied_while_another_edit_loads_is_closed() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, dir) = overlap_harness("cutflow3");
+    let before = cell_card(&h, 2);
+    propose(&mut h);
+    let plan = h
+        .state()
+        .document()
+        .and_then(|d| d.cut_flow.as_ref())
+        .and_then(|f| match &f.phase {
+            llevant_viewer::cutflow::Phase::Planning(s) => {
+                llevant_viewer::cutflow::read(s, |r| r.and_then(|r| r.as_ref().ok().cloned()))
+            }
+            _ => None,
+        })
+        .expect("the plan");
+    // Both at once: the edit of cell 1 (its card as it is) starts, the cut is refused.
+    let ctx = h.ctx.clone();
+    let card = cell_card(&h, 1);
+    h.state_mut().send(
+        Command::EditCard(llevant_scene::source::CardKind::Cell, 1, card),
+        &ctx,
+    );
+    h.state_mut().send(Command::CutApply(plan), &ctx);
+    assert_eq!(flow_phase(&h), "none");
+    step_until(&mut h, "the other edit", |a| !a.is_loading());
+    h.run_steps(3);
+    assert_eq!(flow_phase(&h), "none");
+    assert_eq!(h.state().input_edits().0, 1, "only the other edit");
+    assert_eq!(cell_card(&h, 2), before, "the cut was not written");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Revert while the input is being saved cannot start: the cut stays open.
+#[test]
+fn revert_during_a_save_keeps_the_cut_open() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, dir) = overlap_harness("cutflow4");
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    assert_eq!(flow_phase(&h), "verifying");
+    let ctx = h.ctx.clone();
+    h.state_mut().send(Command::SaveInput, &ctx);
+    h.state_mut().send(Command::RevertCut, &ctx);
+    assert_eq!(flow_phase(&h), "verifying", "the cut stays open");
+    assert_eq!(h.state().input_edits().0, 1);
+    h.run_steps(10);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_cut_is_reverted_or_its_simplification_discarded() {
     if !adapter_available() {
