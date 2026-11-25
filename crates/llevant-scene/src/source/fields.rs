@@ -699,6 +699,18 @@ fn pieces(code: &str) -> Vec<(&str, bool)> {
     out
 }
 
+/// `note` (a `$` comment) on a continuation line of its own if it fits (it
+/// stays a `$` comment, so a label of the cell stays one), else as
+/// comment lines ([`comment_lines`]).
+fn own_line_or_comments(note: &str, newline: &str) -> String {
+    let line = format!("     {note}");
+    if width(&line) <= super::MAX_COLUMNS {
+        format!("{line}{newline}")
+    } else {
+        comment_lines(note, newline)
+    }
+}
+
 /// `note` (a `$` comment) as comment lines, each within
 /// [`super::MAX_COLUMNS`], broken at blanks where it can be.
 fn comment_lines(note: &str, newline: &str) -> String {
@@ -737,7 +749,8 @@ fn comment_lines(note: &str, newline: &str) -> String {
 /// geometry at a `:` or a parenthesis (so a union printed without blanks
 /// breaks too), never inside a number or a keyword; widths in characters.
 /// A `$` comment stays at the end of the last line, with a word moved to a
-/// line of its own if that makes room, else it becomes comment lines after
+/// line of its own if that makes room, else it goes on a line of its own
+/// if it fits (still a `$` comment), else it becomes comment lines after
 /// the card. Lines within the columns, and comment lines, are left as they
 /// are; a word longer than a line is left whole.
 pub fn wrap_long_lines(card: &str) -> String {
@@ -808,9 +821,9 @@ pub fn wrap_long_lines(card: &str) -> String {
                     Some(p) if fits(&text(1, &[p])) => lines.push(vec![p]),
                     Some(p) => {
                         lines[k].push(p);
-                        after = comment_lines(note, newline);
+                        after = own_line_or_comments(note, newline);
                     }
-                    None => after = comment_lines(note, newline),
+                    None => after = own_line_or_comments(note, newline),
                 }
             }
         }
@@ -1133,6 +1146,31 @@ m2 1001 2
             }
             assert_eq!(words(&w), words(&card), "{n}:\n{w}");
         }
+    }
+
+    #[test]
+    fn a_label_stays_a_label_when_the_card_wraps() {
+        let comments = |card: &str| -> Vec<String> {
+            let s = Source::from_str(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
+            let tree = s.tree();
+            let c = tree.cell(1).unwrap().comments();
+            c.into_iter().map(String::from).collect()
+        };
+        // A card of about 100 columns and a label, a term added: the label
+        // goes on a line of its own, as a `$` comment, while that fits.
+        let code = format!("1 0 -1 {} 12345678 imp:n=1", vec!["2"; 45].join(" "));
+        for n in [1usize, 30, 100, 118, 121] {
+            let note = "x".repeat(n);
+            let card = format!("{code} $ {note}\n");
+            let w = wrap_long_lines(&card);
+            assert!(fits(&w), "{n}:\n{w}");
+            assert_eq!(comments(&w), vec![note], "{n}: the label moved:\n{w}");
+        }
+        // Too long for a line of its own: comment lines, all its text kept.
+        let note = "x".repeat(125);
+        let w = wrap_long_lines(&format!("{code} $ {note}\n"));
+        assert!(fits(&w), "{w}");
+        assert_eq!(w.matches('x').count(), 125, "{w}");
     }
 
     #[test]

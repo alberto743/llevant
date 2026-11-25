@@ -231,6 +231,9 @@ impl Source {
             }
         }
         self.unchanged_since(revision)?;
+        if let Some(w) = label_warning(keep, &plan.old_card, &plan.new_card) {
+            plan.warnings.push(w);
+        }
         Ok(plan)
     }
 
@@ -304,6 +307,11 @@ impl Source {
             None => {}
         }
         self.unchanged_since(revision)?;
+        if r.simplified {
+            if let Some(w) = label_warning(keep, &r.old_card, &r.new_card) {
+                r.warnings.push(w);
+            }
+        }
         Ok(r)
     }
 
@@ -397,6 +405,9 @@ impl Source {
             }
         }
         self.unchanged_since(revision)?;
+        if let Some(w) = label_warning(keep, &old_card, &new_card) {
+            result.warnings.push(w);
+        }
         Ok(CutPlan {
             keep,
             cut,
@@ -424,6 +435,25 @@ impl Source {
 
 /// The longest the proof of a card made by [`Source::cut_plan`] may take.
 const PROOF_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The `$` comments (labels) of the card of cell `keep`.
+fn card_labels(card: &str, keep: i64) -> Vec<String> {
+    let m = migjorn::Model::parse(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
+    m.cell(keep)
+        .map(|c| c.comments().into_iter().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// A warning if the card written does not keep the `$` comments of the
+/// card it replaces (a label too long for a line of its own becomes comment
+/// lines, which no rule `$ label` selects the cell by).
+fn label_warning(keep: i64, old_card: &str, new_card: &str) -> Option<String> {
+    (card_labels(old_card, keep) != card_labels(new_card, keep)).then(|| {
+        format!(
+            "a label of cell {keep} does not fit on its card any more: it becomes comment lines"
+        )
+    })
+}
 
 /// The geometry of cell `keep` in `card`, as MCNP reads it (the card alone
 /// in an input of its own; a `#n` stays `#n`).
@@ -614,6 +644,30 @@ mod tests {
         let err = s.apply_expand(&plan).unwrap_err();
         assert!(err.contains("changed since"), "{err}");
         assert_eq!(s.card(CardKind::Cell, 1).unwrap().text, plan.old_card);
+    }
+
+    #[test]
+    fn a_label_that_cannot_stay_a_label_is_warned_of() {
+        // 118 characters: still its own `$` line; 125: comment lines.
+        for (n, warned) in [(118usize, false), (125, true)] {
+            let g = vec!["3"; 40].join(" ");
+            let s = Source::from_str(&format!(
+                "t\n1 0 -1 {g} imp:n=1 $ {}\n2 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n3 px 0\n\n",
+                "x".repeat(n)
+            ));
+            let p = s.cut_plan(1, 2, false).unwrap();
+            let said = p
+                .result
+                .warnings
+                .iter()
+                .any(|w| w.contains("a label of cell 1"));
+            assert_eq!(said, warned, "{n}: {:?}\n{}", p.result.warnings, p.new_card);
+            let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+            assert_eq!(
+                e.warnings.iter().any(|w| w.contains("a label of cell 1")),
+                warned
+            );
+        }
     }
 
     #[test]

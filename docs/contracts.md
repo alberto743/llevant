@@ -140,8 +140,11 @@ breaks a line over 128 columns between words, or inside a word of geometry befor
 or a `)` and after a `(` (a union printed without blanks, as the expansion of a `#n`),
 never inside a number or a keyword (nor in what follows the first keyword: a `fill=` range
 `0:0` stays whole, `a_fill_range_is_never_broken_at_its_colon`), counting characters, not bytes. A `$` comment stays
-at the end of the last line, with a word moved down to make room, or else becomes `c`
-lines after it (so a `$ label` can stop selecting the cell), all of its text kept. Every line
+at the end of the last line, with a word moved down to make room, else on a continuation
+line of its own while it fits in 128 columns (still a `$` comment, so a label stays one,
+`a_label_stays_a_label_when_the_card_wraps`), else it becomes `c` lines after it, all of its
+text kept; a cut that makes that happen warns of it before Apply
+(`a_label_that_cannot_stay_a_label_is_warned_of`). Every line
 it writes fits, except a comment line that was too long already and a piece that cannot be
 broken (a word longer than a line), which are left as they are; and the card reads back
 the same geometry and parameters (`a_union_without_spaces_is_broken_at_its_colons`,
