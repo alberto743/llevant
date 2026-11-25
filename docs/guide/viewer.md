@@ -148,7 +148,9 @@ It goes in steps in the inspector, and nothing is written without a button:
    something is off. What can go wrong is a cell that writes `#A`: it takes in what was
    cut out of A, and may now overlap B. The inspector says which of these it found:
    **solved** (and the other cells A still overlaps, if any), the overlap **remains**,
-   or a **new overlap** of B with a cell that writes `#A`. If not solved, **Revert**
+   or a **new overlap** of B with a cell that writes `#A`. Only a check of the place where
+   A and B meet counts: if the last check was of another region, the inspector says the
+   cut is **not checked**, and you check from the Problems panel. If not solved, **Revert**
    closes the cut and puts the cell back as it was, or **Keep it**. If solved you can
    **Simplify**, **Revert** or **Keep it**.
 4. **Simplify** shortens the geometry with the laws of Boolean algebra, in the
@@ -163,9 +165,13 @@ It goes in steps in the inspector, and nothing is written without a button:
    back to what it was showing.
 
 Each edit is one Undo and is not saved until you save the input. A cell with a `TRCL`, a
-`LIKE` cell, a cell that a `LIKE` cell copies and cells in different universes are refused,
-a cut cell with a `TRCL` is written as `#B` as it is, and cutting a cell out of one that
-lies inside it, or out of one cut by `#B` already, is refused. The inspector names the
+`LIKE` cell (as A or as B), a cell that a `LIKE` cell copies and cells in different
+universes are refused, as is a B that writes `#A` (directly or through other cells: the
+two would complement each other). A B with a `TRCL`, or another `#n` in A that cannot be
+written out, is written as `#n` as it is; cutting a cell out of one that lies inside it,
+or out of one cut by `#B` already, is refused. A cut is written only if nothing in the
+input changed since it was planned, so edit first and cut after. If the cell's `$`
+label no longer fits on its card, the inspector says so before you apply. The inspector names the
 cells that write `#A` before you apply. Once `#B` is written out, cell A no longer
 follows later edits of cell B.
 
