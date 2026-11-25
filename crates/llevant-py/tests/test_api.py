@@ -693,6 +693,35 @@ def test_deck_cut_refuses_what_it_cannot_do(tmp_path):
     assert llevant.Deck.open(out).text() == deck.text()
 
 
+def test_deck_refuses_a_cut_planned_before_another_even_of_another_cell():
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    first = deck.cut(2, 1)
+    second = deck.cut(1, 2)
+    deck.apply(first)
+    with pytest.raises(ValueError, match="changed since"):
+        deck.apply(second)
+    # Planned again after the undo, it is written.
+    deck.undo()
+    deck.apply(deck.cut(1, 2))
+    assert "#2" in deck.text()
+
+
+def test_deck_refuses_cells_that_would_complement_each_other():
+    deck = llevant.Deck.from_text(
+        "t\n1 0 -1 imp:n=1\n2 0 #1 : -2 imp:n=1\n\n1 so 5\n2 so 9\n\n"
+    )
+    with pytest.raises(ValueError, match="complement each other"):
+        deck.cut(1, 2)
+
+
+def test_deck_refuses_a_cut_cell_that_is_a_like_cell():
+    deck = llevant.Deck.from_text(
+        "t\n1 0 -1 imp:n=1\n2 like 3 but imp:n=2\n3 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n\n"
+    )
+    with pytest.raises(ValueError, match="LIKE"):
+        deck.cut(1, 2)
+
+
 def test_deck_refuses_a_cut_planned_before_another():
     deck = llevant.Deck.from_text(OVERLAPPING)
     first = deck.cut(2, 1)

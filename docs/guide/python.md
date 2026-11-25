@@ -43,7 +43,7 @@ m.check(h=2)                            # gaps and overlaps
 deck = llevant.Deck.open("model.i")     # fix an overlap of cells 3 and 4:
 cut = deck.cut(keep=3, cut=4)           # 3 := 3 ∩ #4, shortened by Boolean algebra
 print(cut)                              # the card before and after
-deck.apply(cut); deck.save("fixed.i")
+deck.apply(cut); deck.save("fixed.i")   # plan and apply one cut at a time
 m.diff(m.reload())                      # what changed in the file, cell by cell
 m.recompile(text)                       # a new version of the input, from text: only what changed is built
 f = m.universe(20130)                   # a filler as a model of its own (cut="none" or a box)

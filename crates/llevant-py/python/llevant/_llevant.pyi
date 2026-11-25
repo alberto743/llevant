@@ -594,14 +594,17 @@ class Deck:
         equal to `keep` outside `cut` for any surfaces, as it reads back. The
         plain `#cut` is kept on a tie. Nothing is written.
         `ValueError` for a cell not in the input, cells in different
-        universes, a `LIKE` cell, a `keep` with a `TRCL`, a `keep` that a
-        `LIKE` cell copies and a `keep` cut by `#cut` already. `Cut.warnings`
-        names the cells that write `#keep` (they take in what is cut).
+        universes, a `LIKE` cell (`keep` or `cut`), a `keep` with a `TRCL`, a
+        `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already and
+        a `cut` that writes `#keep`, directly or through other cells (the two
+        would complement each other). `Cut.warnings` names the cells that
+        write `#keep` (they take in what is cut) and a label of `keep` that
+        no longer fits on its card.
         """
     def apply(self, cut: Cut) -> None:
         """Write a cut into the deck. `ValueError` if it has nothing to write
-        (`keep` lies inside `cut`) or if cell `keep` has changed since the cut
-        was planned (plan it again).
+        (`keep` lies inside `cut`) or if the input has changed in any way since
+        the cut was planned (plan it again: plan and apply one cut at a time).
         """
     def undo(self) -> bool:
         """Undo the last cut applied; false if there is none."""

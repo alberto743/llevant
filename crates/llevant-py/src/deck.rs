@@ -113,8 +113,10 @@ impl Deck {
     /// result put in fewer terms by Boolean algebra alone. The result is
     /// proven equal to `keep ∩ ¬cut` for any surfaces. Nothing is written.
     /// `ValueError` for a cell not in the input, cells in different
-    /// universes, a `LIKE` cell, a `keep` with a `TRCL` and a `keep` that a
-    /// `LIKE` cell copies.
+    /// universes, a `LIKE` cell (`keep` or `cut`), a `keep` with a `TRCL`, a
+    /// `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already and a
+    /// `cut` that writes `#keep` (directly or through other cells: the two
+    /// would complement each other).
     #[pyo3(signature = (keep, cut, *, simplify = true))]
     fn cut(&self, py: Python<'_>, keep: i64, cut: i64, simplify: bool) -> PyResult<Cut> {
         let plan = py
@@ -139,7 +141,9 @@ impl Deck {
     }
 
     /// Write a cut into the deck. `ValueError` if it has nothing to write or
-    /// cell `keep` has changed since the cut was planned.
+    /// the input has changed in any way since the cut was planned (it was
+    /// proven from cells other than `keep` as well): plan it again, so plan
+    /// and apply one cut at a time.
     fn apply(&self, cut: &Cut) -> PyResult<()> {
         let e = self.source.apply_cut(&cut.plan).map_err(invalid)?;
         self.done.lock().unwrap().push(e);
