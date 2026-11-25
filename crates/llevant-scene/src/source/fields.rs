@@ -671,13 +671,14 @@ fn width(s: &str) -> usize {
 /// blank. Each piece says whether a blank comes before it.
 fn pieces(code: &str) -> Vec<(&str, bool)> {
     let mut out = Vec::new();
-    // The geometry ends where the first keyword (`imp:n=1`, `fill=`…) is:
-    // after it a `0:0` is a range of a lattice's `fill`, whole.
+    // The geometry ends where the first parameter (`imp:n=1`, `fill=`…, the
+    // first word with an `=`) is: after it a `0:0` is a range of a lattice's
+    // `fill`, whole. (Not at the first word with a letter: a density `-1.2e-3`
+    // comes before the geometry.)
     let mut in_geometry = true;
     for word in code.split_whitespace() {
-        let only = word.chars().all(|c| "0123456789+-.:()#".contains(c));
-        in_geometry &= only;
-        let geometry = in_geometry;
+        in_geometry &= !word.contains('=');
+        let geometry = in_geometry && word.chars().all(|c| "0123456789+-.:()#".contains(c));
         let mut start = 0;
         let mut blank = true;
         if geometry {
@@ -1129,6 +1130,17 @@ m2 1001 2
         let w = wrap_long_lines(&card);
         assert!(fits(&w), "{w}");
         assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{w}");
+    }
+
+    #[test]
+    fn a_density_with_an_exponent_does_not_stop_the_union_being_broken() {
+        let union: Vec<String> = (0..40).map(|k| format!("-{}", 10001 + k)).collect();
+        for density in ["-1.2e-3", "-1.2E-3", "-7.8", "1.0d-2"] {
+            let card = format!("1 5 {density} -1 ({}) imp:n=1\n", union.join(":"));
+            let w = wrap_long_lines(&card);
+            assert!(fits(&w), "{density}:\n{w}");
+            assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{density}:\n{w}");
+        }
     }
 
     #[test]
