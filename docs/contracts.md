@@ -89,8 +89,9 @@ uses them through migjorn's `renumber`, and records each card it changed, before
 after: it snapshots the cards in which one of the old numbers appears as a run of
 digits (every card a renumbering can change), so `restore_all` gives the input back
 byte for byte (`numbers_changed_everywhere_and_taken_back`). Numbers in use, numbers
-not defined, two cells given one number and numbers outside MCNP's range are refused
-and change nothing (`renumbering_refused`). The app test `cells_edited_together`
+not defined, two cells given one number, numbers outside MCNP's range and material 0
+(void: its cells would keep their density, and `m1` would become `m0`, MCNP's defaults)
+are refused and change nothing (`renumbering_refused`). The app test `cells_edited_together`
 edits three cells from the selection, takes it back with one Undo, renumbers two and
 takes that back to the same text.
 `Model::point_in_unit` gives a point in the frame of a universe through the fills

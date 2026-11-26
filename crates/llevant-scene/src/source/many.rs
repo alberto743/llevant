@@ -155,13 +155,22 @@ impl Source {
         if let Some(w) = targets.windows(2).find(|w| w[0] == w[1]) {
             return Err(format!("two {name}s would be numbered {}", w[0]));
         }
-        let lowest = if kind == IdKind::Material { 0 } else { 1 };
+        // Material 0 is void, not a number a material can take: its cells
+        // would keep their density, and `m1` would become `m0` (MCNP's card
+        // of defaults for every material).
+        if kind == IdKind::Material && targets.contains(&0) {
+            return Err(
+                "material 0 is void: a material cannot be numbered 0 (to make cells void, \
+                 edit them)"
+                    .into(),
+            );
+        }
         if let Some(&n) = targets
             .iter()
-            .find(|&&n| !(lowest..=HIGHEST_NUMBER).contains(&n))
+            .find(|&&n| !(1..=HIGHEST_NUMBER).contains(&n))
         {
             return Err(format!(
-                "{name} number {n} is out of MCNP's range ({lowest} to {HIGHEST_NUMBER})"
+                "{name} number {n} is out of MCNP's range (1 to {HIGHEST_NUMBER})"
             ));
         }
         if kind == IdKind::Universe && map.contains_key(&0) {
@@ -545,6 +554,8 @@ m1 1001 1
         assert!(refused(IdKind::Cell, &[(1, 50), (2, 50)]).contains("two cells"));
         assert!(refused(IdKind::Cell, &[(1, 0)]).contains("range"));
         assert!(refused(IdKind::Universe, &[(0, 4)]).contains("real world"));
+        // Material 0 is void: `1 1 -2.7` would become `1 0 -2.7`, `m1` `m0`.
+        assert!(refused(IdKind::Material, &[(1, 0)]).contains("void"));
         assert_eq!(src.to_source(), INPUT, "nothing changed");
         assert!(src
             .renumber(IdKind::Cell, &[(1, 1)])

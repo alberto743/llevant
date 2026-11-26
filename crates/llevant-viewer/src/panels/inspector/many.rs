@@ -699,9 +699,10 @@ pub fn renumber_one(
         let why = match wanted {
             None => Some("not a whole number".to_string()),
             Some(n) if n == id => None,
-            Some(n)
-                if !(1..=HIGHEST_NUMBER).contains(&n) && !(kind == IdKind::Material && n == 0) =>
-            {
+            Some(0) if kind == IdKind::Material => {
+                Some("material 0 is void: edit the cells to make them void".to_string())
+            }
+            Some(n) if !(1..=HIGHEST_NUMBER).contains(&n) => {
                 Some(format!("numbers go from 1 to {HIGHEST_NUMBER}"))
             }
             Some(n) if !free(n) => Some(format!("{name} {n} is in use")),
