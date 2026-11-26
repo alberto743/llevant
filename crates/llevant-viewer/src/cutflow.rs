@@ -38,6 +38,8 @@ pub struct CutFlow {
     pub cut: i64,
     /// The input it was made from (its `Source` and revision).
     key: (usize, u64),
+    /// Stops the planning when the flow is closed or replaced.
+    plan_cancel: Arc<AtomicBool>,
     pub phase: Phase,
 }
 
@@ -65,8 +67,13 @@ impl CutFlow {
     pub fn start(ctx: &egui::Context, source: &Arc<Source>, keep: i64, cut: i64) -> Self {
         let slot: Slot<CutExpand> = Arc::new(Mutex::new(None));
         let (src, out, ctx) = (source.clone(), slot.clone(), ctx.clone());
+        let plan_cancel = Arc::new(AtomicBool::new(false));
+        let limits = Limits {
+            cancel: Some(plan_cancel.clone()),
+            ..Limits::within(PLAN_LIMIT)
+        };
         std::thread::spawn(move || {
-            let r = src.cut_expand(keep, cut, &Limits::within(PLAN_LIMIT));
+            let r = src.cut_expand(keep, cut, &limits);
             *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
             ctx.request_repaint();
         });
@@ -74,6 +81,7 @@ impl CutFlow {
             keep,
             cut,
             key: key(source),
+            plan_cancel,
             phase: Phase::Planning(slot),
         }
     }
@@ -131,9 +139,18 @@ impl CutFlow {
 
     /// Stop the work under way (it ends with what it has).
     pub fn stop(&self) {
+        self.plan_cancel.store(true, Ordering::Relaxed);
         if let Phase::Simplifying { cancel, .. } = &self.phase {
             cancel.store(true, Ordering::Relaxed);
         }
+    }
+}
+
+/// A flow closed or replaced stops what it still had running: its work is
+/// no longer wanted.
+impl Drop for CutFlow {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -146,4 +163,24 @@ pub fn read<T, R>(slot: &Slot<T>, f: impl FnOnce(Option<&Result<T, String>>) -> 
 /// The last check started (a larger number is a check started later).
 pub fn check_id(doc: &crate::document::Document) -> u64 {
     doc.results.checks_started
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flow closed or replaced while it is planning tells the planning to
+    /// stop, so proposals made one after another do not pile up proofs.
+    #[test]
+    fn closing_a_flow_stops_its_planning() {
+        let ctx = egui::Context::default();
+        let src = Arc::new(Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n\n",
+        ));
+        let f = CutFlow::start(&ctx, &src, 2, 1);
+        let flag = f.plan_cancel.clone();
+        assert!(!flag.load(Ordering::Relaxed));
+        drop(f);
+        assert!(flag.load(Ordering::Relaxed));
+    }
 }

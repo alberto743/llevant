@@ -67,19 +67,22 @@ impl ViewerApp {
     }
 
     /// The simplification shown written, as one edit (one Undo); the cut is
-    /// closed.
+    /// closed. Not started (a save is under way): the simplification stays
+    /// shown, to be accepted when it can.
     pub(super) fn cut_accept(&mut self, s: llevant_scene::source::Simplified, ctx: &egui::Context) {
-        if let Some(d) = &mut self.doc {
-            d.cut_flow = None;
-        }
         let what = format!("cell {} simplified", s.keep);
         let select = Query::Cells(vec![s.keep]);
         let said = what.clone();
-        self.start_change(ctx, what, Some(select), move |source| {
+        let started = self.start_change(ctx, what, Some(select), move |source| {
             let mut change = input_edits::Change::one(s.keep, source.apply_simplified(&s)?);
             change.what = said;
             Ok(change)
         });
+        if started {
+            if let Some(d) = &mut self.doc {
+                d.cut_flow = None;
+            }
+        }
     }
 
     /// Cells `ids` each with `changes` made, as one edit (one Undo); the

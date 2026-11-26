@@ -1442,6 +1442,44 @@ fn a_check_started_before_the_cut_does_not_judge_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Accept while the input is being saved: nothing is written, and the
+/// simplification stays shown, to be accepted when it can.
+#[test]
+fn accept_during_a_save_keeps_the_simplification_shown() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, dir) = overlap_harness("cutflow6");
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    h.get_by_label("Simplify").click();
+    step_until(&mut h, "the simplification", |a| {
+        a.document()
+            .and_then(|d| d.cut_flow.as_ref())
+            .is_some_and(|f| match &f.phase {
+                llevant_viewer::cutflow::Phase::Simplifying { slot, .. } => {
+                    llevant_viewer::cutflow::read(slot, |r| r.is_some())
+                }
+                _ => false,
+            })
+    });
+    let simplified = match &h.state().document().unwrap().cut_flow.as_ref().unwrap().phase {
+        llevant_viewer::cutflow::Phase::Simplifying { slot, .. } => {
+            llevant_viewer::cutflow::read(slot, |r| r.unwrap().clone().unwrap())
+        }
+        _ => unreachable!("simplifying"),
+    };
+    let ctx = h.ctx.clone();
+    h.state_mut().send(Command::SaveInput, &ctx);
+    h.state_mut().send(Command::CutAccept(simplified), &ctx);
+    assert_eq!(flow_phase(&h), "simplifying", "the simplification stays shown");
+    assert_eq!(h.state().input_edits().0, 1, "nothing written");
+    h.run_steps(10);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_cut_is_reverted_or_its_simplification_discarded() {
     if !adapter_available() {
