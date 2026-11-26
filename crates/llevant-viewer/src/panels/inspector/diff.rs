@@ -211,13 +211,13 @@ pub fn display_lines(card: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut depth = 0i32;
+    // `$` ends what is read of a line at any depth: a comment inside a group
+    // is shown after the group, which goes on on the next line.
+    let mut held: Vec<String> = Vec::new();
     let mut chars = card.trim_end().chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '$' if depth == 0 => {
-                if !cur.is_empty() {
-                    tokens.push(std::mem::take(&mut cur));
-                }
+            '$' => {
                 let mut comment = String::from("$");
                 while let Some(&n) = chars.peek() {
                     if n == '\n' {
@@ -226,11 +226,19 @@ pub fn display_lines(card: &str) -> Vec<String> {
                     comment.push(n);
                     chars.next();
                 }
-                tokens.push(comment);
+                if depth > 0 {
+                    held.push(comment);
+                } else {
+                    if !cur.is_empty() {
+                        tokens.push(std::mem::take(&mut cur));
+                    }
+                    tokens.push(comment);
+                }
             }
             c if c.is_whitespace() && depth <= 0 => {
                 if !cur.is_empty() {
                     tokens.push(std::mem::take(&mut cur));
+                    tokens.append(&mut held);
                 }
             }
             c if c.is_whitespace() => {
@@ -252,6 +260,7 @@ pub fn display_lines(card: &str) -> Vec<String> {
     if !cur.is_empty() {
         tokens.push(cur);
     }
+    tokens.append(&mut held);
     // "1 0" or "1 2 -7.8" on the first line.
     let head = match tokens.get(1).map(String::as_str) {
         Some("0") | None => 2,
@@ -491,6 +500,14 @@ mod tests {
         );
         // With a material: number, material and density together.
         assert_eq!(display_lines("1 5 -7.8 -1 imp:n=1")[0], "1 5 -7.8");
+    }
+
+    /// A `$` inside a group ends what is read of its line: the `)` in the
+    /// comment does not close the group, which goes on on the next line.
+    #[test]
+    fn a_comment_inside_a_group_does_not_end_it() {
+        let lines = display_lines("2 0 (-2 $ note )\n     : -4) 3 imp:n=1");
+        assert_eq!(lines, ["2 0", "(-2 : -4)", "$ note )", "3", "imp:n=1"], "{lines:?}");
     }
 
     #[test]
