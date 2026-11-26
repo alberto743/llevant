@@ -197,7 +197,9 @@ fn verdict(doc: &Document, f: &CutFlow, plan: &CutExpand, check_before: u64) -> 
     let Some(run) = doc.results.check.as_ref() else {
         return Verdict::NotChecked;
     };
-    if cutflow::check_id(doc) == check_before {
+    // A check started before the cut was written looked at the model
+    // without it, even if it finished after.
+    if run.started <= check_before {
         return Verdict::NotChecked;
     }
     let m = &doc.model;
@@ -317,8 +319,9 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
             ui.label(
                 egui::RichText::new(
                     "No check of the place where the two cells meet has run since the cut \
-                     (the model may not be complete, or the check was of another region): \
-                     check from the Problems panel to see whether the overlap is solved.",
+                     (the model may not be complete, the check was of another region, or it \
+                     started before the cut): check from the Problems panel to see whether \
+                     the overlap is solved.",
                 )
                 .weak(),
             );

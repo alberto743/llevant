@@ -1400,6 +1400,48 @@ fn revert_during_a_save_keeps_the_cut_open() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Only a check started after the cut was written says whether it solved
+/// the overlap: one started before looked at the model without the cut,
+/// even if it finished after.
+#[test]
+fn a_check_started_before_the_cut_does_not_judge_it() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, dir) = overlap_harness("cutflow5");
+    propose(&mut h);
+    apply_and_verify(&mut h);
+    h.get_by_label_contains("Overlap solved");
+
+    // The same result, as if from a check started before the cut.
+    let d = h.state_mut().document_mut().unwrap();
+    let before = match &d.cut_flow.as_ref().unwrap().phase {
+        llevant_viewer::cutflow::Phase::Verifying { check_before, .. } => *check_before,
+        _ => unreachable!("verifying"),
+    };
+    let run = d.results.check.clone().expect("the check of the cut");
+    assert!(run.started > before);
+    let early = llevant_viewer::jobs::CheckRun {
+        volumes: run.volumes.clone(),
+        scope: run.scope.clone(),
+        covered: run.covered.clone(),
+        started: before,
+        seconds: run.seconds,
+    };
+    d.results.check = Some(Arc::new(early));
+    h.run_steps(3);
+    h.get_by_label_contains("No check of the place where the two cells meet");
+    assert!(h.query_by_label_contains("Overlap solved").is_none());
+
+    // The check of the cut back: solved again.
+    h.state_mut().document_mut().unwrap().results.check = Some(run);
+    h.run_steps(3);
+    h.get_by_label_contains("Overlap solved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_cut_is_reverted_or_its_simplification_discarded() {
     if !adapter_available() {

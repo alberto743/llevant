@@ -149,8 +149,9 @@ It goes in steps in the inspector, and nothing is written without a button:
    cut out of A, and may now overlap B. The inspector says which of these it found:
    **solved** (and the other cells A still overlaps, if any), the overlap **remains**,
    or a **new overlap** of B with a cell that writes `#A`. Only a check of the place where
-   A and B meet counts: if the last check was of another region, the inspector says the
-   cut is **not checked**, and you check from the Problems panel. If not solved, **Revert**
+   A and B meet, started after the cut, counts: if the last check was of another region, or
+   began before Apply, the inspector says the cut is **not checked**, and you check from the
+   Problems panel. If not solved, **Revert**
    closes the cut and puts the cell back as it was, or **Keep it**. If solved you can
    **Simplify**, **Revert** or **Keep it**.
 4. **Simplify** shortens the geometry with the laws of Boolean algebra, in the

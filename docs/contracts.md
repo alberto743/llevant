@@ -109,7 +109,9 @@ nothing), `a_cancelled_proof_gives_no_answer`, `a_huge_product_of_unions_is_give
 `crates/llevant-scene/tests/cut.rs` compiles the two steps as well: the expansion fixes
 the overlap and changes nothing else, the simplification labels every point as the
 expansion, and a cell that writes `#A` takes in `A ∩ B` (the overlap the viewer's verdict
-then reports as new, `panels/inspector/cut.rs` `judge` tests).
+then reports as new, `panels/inspector/cut.rs` `judge` tests). The verdict counts only a
+check that covered where A and B meet (`jobs.rs` `covered_by` test) and that started after
+the cut was written (`a_check_started_before_the_cut_does_not_judge_it`, `tests/app/editing.rs`).
 
 ## Editing the input
 

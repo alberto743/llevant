@@ -321,8 +321,9 @@ pub struct Results {
     pub jobs: Vec<Job>,
     pub volumes: Option<Arc<VolumeRun>>,
     pub check: Option<Arc<CheckRun>>,
-    /// How many checks have finished (`check` is the last one).
-    pub checks: u64,
+    /// How many checks have been started: each check is numbered by it
+    /// ([`CheckRun::started`]).
+    pub checks_started: u64,
     pub alike: Option<Arc<Alike>>,
 }
 
@@ -1094,7 +1095,11 @@ impl Document {
                 self.results.jobs.retain(|j| j.kind != kind);
                 self.results.jobs.push(match kind {
                     JobKind::Fingerprints => Job::fingerprints(m, wake),
-                    _ => Job::check(m, region, h, scope, within, wake),
+                    _ => {
+                        self.results.checks_started += 1;
+                        let n = self.results.checks_started;
+                        Job::check(m, region, h, scope, within, n, wake)
+                    }
                 });
             }
             Command::StartVolumes(spec) => {
@@ -1403,7 +1408,6 @@ impl Document {
                         v.seconds
                     ));
                     self.results.check = Some(Arc::new(v));
-                    self.results.checks += 1;
                 }
                 Outcome::Fingerprints(a) => {
                     self.messages.info(format!(

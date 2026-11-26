@@ -149,6 +149,9 @@ pub struct CheckRun {
     pub scope: String,
     /// Where it looked: the boxes it was limited to, else its region.
     pub covered: Vec<Aabb>,
+    /// Its number among the checks started (a larger one started later, on
+    /// the model as it was then).
+    pub started: u64,
     pub seconds: f64,
 }
 
@@ -429,13 +432,16 @@ impl Job {
     }
 
     /// Gaps and overlaps of `m` over `region` at spacing `h`; with
-    /// `within`, on the lines of that grid inside those boxes alone.
+    /// `within`, on the lines of that grid inside those boxes alone;
+    /// `started`: its number among the checks started.
+    #[allow(clippy::too_many_arguments)]
     pub fn check(
         m: Arc<Model>,
         region: Aabb,
         h: f64,
         scope: String,
         within: Option<Arc<Vec<Aabb>>>,
+        started: u64,
         wake: Option<egui::Context>,
     ) -> Job {
         let title = format!("check of {scope} (h = {})", short(h));
@@ -455,6 +461,7 @@ impl Job {
                     volumes,
                     scope,
                     covered,
+                    started,
                     seconds: start.elapsed().as_secs_f64(),
                 }),
                 Err(e) => Outcome::Failed(e.to_string()),

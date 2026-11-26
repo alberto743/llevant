@@ -46,8 +46,8 @@ pub enum Phase {
     Planning(Slot<CutExpand>),
     /// Approved: being written and built.
     Applying(CutExpand),
-    /// Written. `check_before`: which check the document had when it was
-    /// written (a later one is the check of what the cut changed).
+    /// Written. `check_before`: the last check started when it was written
+    /// (only one started later looked at the model with the cut).
     Verifying { plan: CutExpand, check_before: u64 },
     /// Being simplified, then shown (the result, once made).
     Simplifying {
@@ -143,8 +143,7 @@ pub fn read<T, R>(slot: &Slot<T>, f: impl FnOnce(Option<&Result<T, String>>) -> 
     f(g.as_ref())
 }
 
-/// Which check the document has (how many it has had): a larger number is
-/// a newer check.
+/// The last check started (a larger number is a check started later).
 pub fn check_id(doc: &crate::document::Document) -> u64 {
-    doc.results.checks
+    doc.results.checks_started
 }
