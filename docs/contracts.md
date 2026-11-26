@@ -97,8 +97,9 @@ copies; a `keep` cut by `#cut` already; cells in different universes; a cut that
 make the two cells write each other's complement, directly or through other cells, a
 `LIKE m BUT` cell counting as writing what m writes
 (`a_cut_that_would_make_cells_complement_each_other_is_refused`); and any input that
-gives `U` or `TRCL` on a data card, which is not read
-(`a_cut_is_refused_when_cells_are_placed_by_a_data_card`). A `cut` with a `TRCL` is
+gives `U` or `TRCL` on a data card, which is not read, refused by `cell_simplify` as well
+(`a_cut_is_refused_when_cells_are_placed_by_a_data_card`,
+`a_simplification_is_refused_when_cells_are_placed_by_a_data_card`). A `cut` with a `TRCL` is
 written as `#n`, not expanded. The cells that write `#keep`, their `LIKE` copies
 included, are named in the warnings and in `CutExpand::users`
 (`a_like_copy_of_a_cell_writing_the_complement_is_named`).

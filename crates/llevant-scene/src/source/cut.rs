@@ -120,29 +120,8 @@ impl Source {
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
             .text;
         let tree = self.tree();
-        // `U` or `TRCL` on a data card: the checks above read the cell cards
-        // alone (as llevant does), and would miss a universe or a move.
-        // A vertical-format card (`#` then the column names) has no name:
-        // its columns are read from its first line.
-        let moves = |n: &str| {
-            let n = n.trim_start_matches('*');
-            let n = n.split(':').next().unwrap_or(n);
-            n.eq_ignore_ascii_case("u") || n.eq_ignore_ascii_case("trcl")
-        };
-        if let Some(name) = tree.cell_parameter_cards().find_map(|c| match c.name() {
-            Some(n) => moves(n).then(|| n.to_string()),
-            None => {
-                let head = c.text().trim_start().strip_prefix('#')?.lines().next()?;
-                let head = head.split('$').next().unwrap_or("");
-                head.split_whitespace()
-                    .find(|w| moves(w))
-                    .map(|w| format!("# {w}"))
-            }
-        }) {
-            return Err(format!(
-                "the input gives cell parameters on a `{name}` data card, which is not read: \
-                 cut by hand"
-            ));
+        if let Some(why) = placed_by_data_card(&tree, "cut") {
+            return Err(why);
         }
         let a = tree
             .cell(keep)
@@ -276,6 +255,11 @@ impl Source {
     /// the long work; nothing is written (see [`Source::apply_simplified`]).
     pub fn cell_simplify(&self, keep: i64, limits: &Limits) -> Result<Simplified, String> {
         let revision = self.revision();
+        // A `#n` expanded without the move a data card gives its cell would
+        // be proven equal to the wrong region.
+        if let Some(why) = placed_by_data_card(&self.tree(), "simplify") {
+            return Err(why);
+        }
         let old_card = self
             .card(CardKind::Cell, keep)
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
@@ -501,6 +485,33 @@ fn card_geometry(card: &str, keep: i64) -> Result<Expr, String> {
         .ok_or_else(|| format!("cell {keep}: the card does not read back"))?
         .geometry_expr()
         .map_err(|e| format!("cell {keep}: {}", e.message))
+}
+
+/// Why an input that gives `U` or `TRCL` on a data card is not cut or
+/// simplified (`what`): llevant reads them from the cell cards alone, so
+/// the checks would miss a universe, and a `#n` would be expanded without
+/// its move. A vertical-format card (`#` then the column names) has no
+/// name: its columns are read from its first line.
+fn placed_by_data_card(tree: &migjorn::Model, what: &str) -> Option<String> {
+    let moves = |n: &str| {
+        let n = n.trim_start_matches('*');
+        let n = n.split(':').next().unwrap_or(n);
+        n.eq_ignore_ascii_case("u") || n.eq_ignore_ascii_case("trcl")
+    };
+    let name = tree.cell_parameter_cards().find_map(|c| match c.name() {
+        Some(n) => moves(n).then(|| n.to_string()),
+        None => {
+            let head = c.text().trim_start().strip_prefix('#')?.lines().next()?;
+            let head = head.split('$').next().unwrap_or("");
+            head.split_whitespace()
+                .find(|w| moves(w))
+                .map(|w| format!("# {w}"))
+        }
+    })?;
+    Some(format!(
+        "the input gives cell parameters on a `{name}` data card, which is not read: \
+         {what} by hand"
+    ))
 }
 
 /// The first cell, from `from` on through the cells each writes `#n` of,
@@ -817,6 +828,18 @@ mod tests {
         // An `IMP` column alone is fine.
         let imp = format!("{deck}#  imp:p\n1  1\n2  1\n3  1\n4  0\n");
         assert!(Source::from_str(&imp).cut_plan(1, 2, false).is_ok());
+    }
+
+    /// Simplify refuses it too: cell 2, moved by a data card, would be
+    /// expanded where it is not, and `-1 #2` written as `-1`.
+    #[test]
+    fn a_simplification_is_refused_when_cells_are_placed_by_a_data_card() {
+        let deck = "t\n1 0 -1 #2\n2 0 1 -2\n3 0 2\n\n1 px 0\n2 so 50\n\n";
+        let l = Limits::default();
+        assert!(Source::from_str(deck).cell_simplify(1, &l).is_ok());
+        let moved = format!("{deck}#  trcl\n1  j\n2  (-10 0 0)\n3  j\n");
+        let err = Source::from_str(&moved).cell_simplify(1, &l).unwrap_err();
+        assert!(err.contains("data card"), "{err}");
     }
 
     #[test]
