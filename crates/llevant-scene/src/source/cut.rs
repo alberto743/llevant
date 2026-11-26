@@ -127,14 +127,23 @@ impl Source {
         let tree = self.tree();
         // `U` or `TRCL` on a data card: the checks above read the cell cards
         // alone (as llevant does), and would miss a universe or a move.
-        if let Some(name) = tree
-            .cell_parameter_cards()
-            .filter_map(|c| c.name())
-            .find(|n| {
-                let n = n.trim_start_matches('*');
-                n.eq_ignore_ascii_case("u") || n.eq_ignore_ascii_case("trcl")
-            })
-        {
+        // A vertical-format card (`#` then the column names) has no name:
+        // its columns are read from its first line.
+        let moves = |n: &str| {
+            let n = n.trim_start_matches('*');
+            let n = n.split(':').next().unwrap_or(n);
+            n.eq_ignore_ascii_case("u") || n.eq_ignore_ascii_case("trcl")
+        };
+        if let Some(name) = tree.cell_parameter_cards().find_map(|c| match c.name() {
+            Some(n) => moves(n).then(|| n.to_string()),
+            None => {
+                let head = c.text().trim_start().strip_prefix('#')?.lines().next()?;
+                let head = head.split('$').next().unwrap_or("");
+                head.split_whitespace()
+                    .find(|w| moves(w))
+                    .map(|w| format!("# {w}"))
+            }
+        }) {
             return Err(format!(
                 "the input gives cell parameters on a `{name}` data card, which is not read: \
                  cut by hand"
@@ -798,6 +807,15 @@ mod tests {
             .cut_plan(1, 2, false)
             .unwrap_err();
         assert!(err.contains("data card"), "{err}");
+        // In vertical format: a `TRCL` column moves cell 1.
+        let vertical = format!("{deck}#  trcl  imp:p\n1  (5 0 0)  1\n2  j  1\n3  j  1\n4  j  0\n");
+        let err = Source::from_str(&vertical)
+            .cut_plan(1, 2, false)
+            .unwrap_err();
+        assert!(err.contains("data card"), "{err}");
+        // An `IMP` column alone is fine.
+        let imp = format!("{deck}#  imp:p\n1  1\n2  1\n3  1\n4  0\n");
+        assert!(Source::from_str(&imp).cut_plan(1, 2, false).is_ok());
     }
 
     #[test]
