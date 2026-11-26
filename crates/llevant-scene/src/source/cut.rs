@@ -382,7 +382,7 @@ impl Source {
     /// geometry `A` becomes `A #B`, simplified by Boolean algebra when
     /// `simplify` (`#B` expanded, the other `#n` kept when that is as short;
     /// the card is proven equal to `A ∩ ¬B` from its text, whatever the
-    /// surfaces are; the `algebra` module), all within [`PLAN_LIMIT`]. The
+    /// surfaces are; the `algebra` module), all within 10 s. The
     /// plain `A #B` is kept on a tie. Nothing is written: [`Source::apply_cut`]
     /// does.
     ///
