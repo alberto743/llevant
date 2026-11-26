@@ -700,7 +700,7 @@ pub fn renumber_one(
             None => Some("not a whole number".to_string()),
             Some(n) if n == id => None,
             Some(n)
-                if !(1..=HIGHEST_NUMBER).contains(&n) && !(kind == IdKind::Material && n == 0) =>
+                if !((1..=HIGHEST_NUMBER).contains(&n) || (kind == IdKind::Material && n == 0)) =>
             {
                 Some(format!("numbers go from 1 to {HIGHEST_NUMBER}"))
             }
