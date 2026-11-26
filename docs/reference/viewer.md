@@ -48,7 +48,8 @@ change is. The edits are not written to the file until Save, in the banner that 
 them, with Undo edit, Discard and Copy changed cards (each card before and after: an
 edit to an assembled input is lost at the next assembly, so carry it into the
 sources). Reload, Open and quitting ask before dropping edits not saved. Cards read
-from `READ` files cannot be edited.
+from `READ` files cannot be edited, nor an input that is not UTF-8 (a Latin-1 `é` in a
+comment, say: writing it would change those bytes; convert it with `iconv` first).
 
 A surface's coefficients also appear as fields above its card. You can drag one, or
 click it and type a value. While you drag, the 3D view and the slice follow the

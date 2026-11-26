@@ -211,6 +211,25 @@ impl ViewerApp {
                 // Back to the start screen.
                 self.path = PathBuf::new();
             }
+            // An edit cancelled once made in the input is taken back there
+            // (one that failed was taken back as it failed): the input stays
+            // as the model shown and the edits listed.
+            if let (Ok(load), Some(source)) = (&r, &self.source) {
+                if let Some(e) = &load.edit {
+                    e.revert(source);
+                }
+            }
+            // A cut whose write was cancelled is not written: closed, so that
+            // a later edit is not taken for it (a cut already written stays).
+            if let Some(d) = &mut self.doc {
+                if editing
+                    && d.cut_flow
+                        .as_ref()
+                        .is_some_and(|f| matches!(f.phase, crate::cutflow::Phase::Applying(_)))
+                {
+                    d.cut_flow = None;
+                }
+            }
             self.error = None;
             return;
         }

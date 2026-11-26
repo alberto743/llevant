@@ -14,6 +14,8 @@ impl ViewerApp {
             Some("wait for the universe being opened")
         } else if self.source.is_none() || self.source_loading.is_some() {
             Some("the input's cards are being read")
+        } else if self.source.as_ref().is_some_and(|s| s.not_utf8()) {
+            Some("the input is not UTF-8: saving it would change its other bytes")
         } else if self.dragging.as_ref().is_some_and(|d| !d.committing) {
             Some("apply or cancel the surface being moved first")
         } else {

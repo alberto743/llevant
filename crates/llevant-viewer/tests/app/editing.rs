@@ -1259,6 +1259,32 @@ fn apply_and_verify(h: &mut Harness<'_, ViewerApp>) {
     h.run_steps(4);
 }
 
+/// A cut whose write is cancelled is closed, not left being written: a new
+/// one can be proposed, and nothing was written.
+#[test]
+fn a_cut_whose_write_is_cancelled_is_closed() {
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, _dir) = overlap_harness("cutcancel");
+    let before = cell_card(&h, 2);
+    propose(&mut h);
+    h.get_by_label("Apply").click();
+    step_until(&mut h, "the write under way", |a| a.is_loading());
+    assert_eq!(flow_phase(&h), "applying");
+    send_cmd(&mut h, Command::CancelLoading);
+    step_until(&mut h, "the cancelled write", |a| !a.is_loading());
+    h.run_steps(3);
+    assert_eq!(flow_phase(&h), "none");
+    assert_eq!(h.state().input_edits().0, 0);
+    assert_eq!(cell_card(&h, 2), before);
+    // A new proposal is taken.
+    propose(&mut h);
+    assert_eq!(flow_phase(&h), "planning");
+}
+
 #[test]
 fn a_cut_is_proposed_applied_verified_and_simplified() {
     if !adapter_available() {

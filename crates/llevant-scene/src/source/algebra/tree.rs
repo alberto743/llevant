@@ -103,6 +103,8 @@ fn pass(b: &Bool, known: &mut HashMap<Atom, bool>, stats: &mut Stats) -> Bool {
     // The terms stay in the order they were written (the result is shown as
     // a diff of the cell as it was).
     let mut out: Vec<Bool> = Vec::new();
+    // What `out` holds, to look up (`out` keeps the order).
+    let mut seen: std::collections::HashSet<Bool> = Default::default();
     let mut emitted: std::collections::HashSet<Atom> = Default::default();
     let mut result = None;
     for it in &flat {
@@ -110,6 +112,7 @@ fn pass(b: &Bool, known: &mut HashMap<Atom, bool>, stats: &mut Stats) -> Bool {
             if let Some(p) = lits.get(a) {
                 if emitted.insert(*a) {
                     out.push(Bool::Lit(*a, *p));
+                    seen.insert(Bool::Lit(*a, *p));
                 }
             }
             continue;
@@ -129,13 +132,13 @@ fn pass(b: &Bool, known: &mut HashMap<Atom, bool>, stats: &mut Stats) -> Bool {
             // A literal against one of the other sense: the product (or
             // sum) is a constant.
             if let Bool::Lit(a, p) = x {
-                if out.contains(&Bool::Lit(*a, !*p)) {
+                if seen.contains(&Bool::Lit(*a, !*p)) {
                     stats.contradictions += 1;
                     result = Some(zero.clone());
                     break;
                 }
             }
-            if !out.contains(x) {
+            if seen.insert(x.clone()) {
                 out.push(x.clone());
             } else {
                 stats.absorbed += 1;

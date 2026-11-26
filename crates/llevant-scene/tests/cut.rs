@@ -198,10 +198,39 @@ fn a_shortened_cut_labels_every_point_as_the_plain_one() {
     assert_eq!(who(&a.to_source(), &pts), who(&b.to_source(), &pts));
 }
 
+/// The simplification is proven on surface senses true or false: off the
+/// surfaces it labels every point as the longer form, on one it may not.
+/// `1 (-1:2) -3` and `1 2 -3` are the same region, but at (0, -1, 0), on
+/// surface 1 where `2` is false, the first is on-surface (unknown) and the
+/// second is outside (`docs/contracts.md`, "Cut").
+#[test]
+fn a_simplified_card_may_label_a_point_on_a_surface_otherwise() {
+    let deck = |g: &str| {
+        format!(
+            "t\n1 0 {g} imp:n=1\n2 0 #1 -9 imp:n=1\n3 0 9 imp:n=0\n\n\
+             1 px 0\n2 py 0\n3 so 10\n9 so 50\n\n"
+        )
+    };
+    let label = |g: &str, p: Vec3| {
+        let m = Model::from_text(&deck(g), &Options::default());
+        let found = reference::classify(&m, &[p], Depth::All);
+        found.labels[found.ids[0] as usize].status
+    };
+    let on = [0.0, -1.0, 0.0];
+    assert_eq!(label("1 (-1:2) -3", on), Status::OnSurface);
+    assert_ne!(label("1 2 -3", on), Status::OnSurface);
+    // Off the surfaces, alike.
+    for p in [[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0]] {
+        assert_eq!(label("1 (-1:2) -3", p), label("1 2 -3", p), "{p:?}");
+    }
+}
+
 /// Every pair of overlapping cells of the overlap zoo
 /// (`tools/mcnp-oracle/models/overlaps.i`), cut as the viewer cuts (`#B`
 /// expanded, then simplified) or refused with its reason: each card written
-/// fits MCNP's columns, and the two cells no longer overlap where they met.
+/// fits MCNP's columns, and where the two overlapped before (sampled in the
+/// frame the cells are placed in), the cell not cut is left alone after the
+/// expansion and after the simplification.
 #[test]
 fn the_overlap_zoo_is_cut_or_refused() {
     let path = concat!(
@@ -245,39 +274,20 @@ fn the_overlap_zoo_is_cut_or_refused() {
         (224, 221, None),
     ];
     let fits = |card: &str| card.lines().all(|l| l.chars().count() <= 128);
-    for &(keep, cut, refused) in cases {
-        let s = Source::from_str(&text);
-        let e = s.cut_expand(keep, cut, &Limits::default());
-        match (refused, e) {
-            (Some(why), Err(err)) => {
-                assert!(err.contains(why), "{keep} #{cut}: {err}");
-                continue;
-            }
-            (Some(why), Ok(_)) => panic!("{keep} #{cut}: not refused ({why})"),
-            (None, Err(err)) => panic!("{keep} #{cut}: {err}"),
-            (None, Ok(e)) if e.empty => continue,
-            (None, Ok(e)) => {
-                assert!(fits(&e.new_card), "{keep} #{cut}:\n{}", e.new_card);
-                s.apply_expand(&e).unwrap();
-            }
+    // Where cells meet: their boxes, in the frame their universe is placed
+    // in (universe 1 fills cell 184 moved by (800, 40, 0)).
+    let shift = |n: i64| -> Vec3 {
+        if (191..=193).contains(&n) {
+            [800.0, 40.0, 0.0]
+        } else {
+            [0.0; 3]
         }
-        let r = s.cell_simplify(keep, &Limits::default()).unwrap();
-        if r.simplified {
-            assert!(fits(&r.new_card), "{keep} #{cut}:\n{}", r.new_card);
-            s.apply_simplified(&r).unwrap();
-        }
-        // Where the two met, they no longer overlap (in universe 0 only: the
-        // cells of universe 1 are placed elsewhere).
-        if keep == 191 {
-            continue;
-        }
-        let m = Model::from_text(&s.to_source(), &Options::default());
+    };
+    let overlap_points = |m: &Model, keep: i64, cut: i64| -> Vec<Vec3> {
         let (a, b) = (m.cell_index(keep).unwrap(), m.cell_index(cut).unwrap());
-        let (ba, bb) = (m.cell(a).bbox, m.cell(b).bbox);
-        let (lo, hi): (Vec3, Vec3) = (
-            std::array::from_fn(|i| ba.lo[i].max(bb.lo[i])),
-            std::array::from_fn(|i| ba.hi[i].min(bb.hi[i])),
-        );
+        let (ba, bb, d) = (m.cell(a).bbox, m.cell(b).bbox, shift(keep));
+        let lo: Vec3 = std::array::from_fn(|i| ba.lo[i].max(bb.lo[i]) + d[i]);
+        let hi: Vec3 = std::array::from_fn(|i| ba.hi[i].min(bb.hi[i]) + d[i]);
         let n = 24;
         let mut pts = Vec::new();
         for i in 0..n {
@@ -290,14 +300,70 @@ fn the_overlap_zoo_is_cut_or_refused() {
                 }
             }
         }
-        let found = reference::classify(&m, &pts, Depth::All);
-        let both = found.labels.iter().any(|l| {
-            l.status == Status::Overlap && l.involved.contains(&a) && l.involved.contains(&b)
-        });
-        assert!(
-            !both,
-            "{keep} #{cut}: still overlapping\n{}",
-            s.cell(keep).unwrap().text
-        );
+        let found = reference::classify(m, &pts, Depth::All);
+        pts.iter()
+            .zip(&found.ids)
+            .filter(|&(_, &id)| {
+                let l = &found.labels[id as usize];
+                l.status == Status::Overlap && l.involved.contains(&a) && l.involved.contains(&b)
+            })
+            .map(|(p, _)| *p)
+            .collect()
+    };
+    // At the points where they overlapped: B is still there, A no longer
+    // (B, or a cell filled with what holds it, is on the point's path, or
+    // is one of the cells of a problem there).
+    let left_to_b = |s: &Source, keep: i64, cut: i64, pts: &[Vec3], step: &str| {
+        let m = Model::from_text(&s.to_source(), &Options::default());
+        let (a, b) = (m.cell_index(keep).unwrap(), m.cell_index(cut).unwrap());
+        let found = reference::classify(&m, pts, Depth::All);
+        for (p, &id) in pts.iter().zip(&found.ids) {
+            let l = &found.labels[id as usize];
+            let cells: Vec<u32> = match l.status {
+                // B may be filled: the cell that holds the point is below it.
+                Status::Inside => l.path.iter().map(|s| s.cell).collect(),
+                _ => l
+                    .path
+                    .iter()
+                    .map(|s| s.cell)
+                    .chain(l.involved.iter().copied())
+                    .collect(),
+            };
+            assert!(
+                cells.contains(&b) && !cells.contains(&a),
+                "{keep} #{cut} ({step}): at {p:?}, {:?} {:?}\n{}",
+                l.status,
+                cells,
+                s.cell(keep).unwrap().text
+            );
+        }
+    };
+    let before = Model::from_text(&text, &Options::default());
+    for &(keep, cut, refused) in cases {
+        let s = Source::from_str(&text);
+        let e = s.cut_expand(keep, cut, &Limits::default());
+        let e = match (refused, e) {
+            (Some(why), Err(err)) => {
+                assert!(err.contains(why), "{keep} #{cut}: {err}");
+                continue;
+            }
+            (Some(why), Ok(_)) => panic!("{keep} #{cut}: not refused ({why})"),
+            (None, Err(err)) => panic!("{keep} #{cut}: {err}"),
+            (None, Ok(e)) => e,
+        };
+        let pts = overlap_points(&before, keep, cut);
+        assert!(!pts.is_empty(), "{keep} #{cut}: they do not overlap before");
+        if e.empty {
+            continue;
+        }
+        assert!(fits(&e.new_card), "{keep} #{cut}:\n{}", e.new_card);
+        s.apply_expand(&e).unwrap();
+        left_to_b(&s, keep, cut, &pts, "expanded");
+        let r = s.cell_simplify(keep, &Limits::default()).unwrap();
+        if r.simplified {
+            assert!(fits(&r.new_card), "{keep} #{cut}:\n{}", r.new_card);
+            s.apply_simplified(&r).unwrap();
+            left_to_b(&s, keep, cut, &pts, "simplified");
+        }
     }
 }

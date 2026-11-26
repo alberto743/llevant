@@ -107,6 +107,8 @@ pub struct Source {
     lines: RwLock<CardLines>,
     /// Changes each time the tree is taken to be written ([`Source::revision`]).
     revision: AtomicU64,
+    /// The file read was not UTF-8 ([`Source::not_utf8`]).
+    not_utf8: bool,
 }
 
 /// Every revision of every [`Source`], so that no two sources, nor two
@@ -163,7 +165,21 @@ impl Source {
             path: path.to_path_buf(),
             source,
         })?;
-        Ok(Source::from_str(&String::from_utf8_lossy(&bytes)))
+        Ok(match String::from_utf8(bytes) {
+            Ok(text) => Source::from_str(&text),
+            Err(e) => {
+                let mut s = Source::from_str(&String::from_utf8_lossy(e.as_bytes()));
+                s.not_utf8 = true;
+                s
+            }
+        })
+    }
+
+    /// Whether the file read was not UTF-8 (a Latin-1 `é`, say): its text
+    /// has U+FFFD where those bytes were, so writing it would change them.
+    /// The viewer does not edit such an input, and `Deck.save` refuses it.
+    pub fn not_utf8(&self) -> bool {
+        self.not_utf8
     }
 
     /// The cards of input text.
@@ -179,6 +195,7 @@ impl Source {
             tree: RwLock::new(tree),
             lines: RwLock::new(lines),
             revision: AtomicU64::new(next_revision()),
+            not_utf8: false,
         }
     }
 
@@ -467,6 +484,31 @@ fn set_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file that is not UTF-8 is read (its other bytes as U+FFFD) and
+    /// marked, so that nothing writes it; one that is, is not.
+    #[test]
+    fn a_file_not_utf8_is_marked() {
+        let dir = std::env::temp_dir().join(format!("llevant-utf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let latin = dir.join("latin1.i");
+        std::fs::write(
+            &latin,
+            b"caf\xe9\n1 0 -1 imp:n=1\n2 0 1 imp:n=0\n\n1 so 5\n\n",
+        )
+        .unwrap();
+        let s = Source::load(&latin).unwrap();
+        assert!(s.not_utf8());
+        assert!(s.cell(1).is_some());
+        let utf8 = dir.join("utf8.i");
+        std::fs::write(
+            &utf8,
+            "caf\u{e9}\n1 0 -1 imp:n=1\n2 0 1 imp:n=0\n\n1 so 5\n\n",
+        )
+        .unwrap();
+        assert!(!Source::load(&utf8).unwrap().not_utf8());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn surface_coefficients_written_in_place() {

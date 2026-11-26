@@ -135,17 +135,22 @@ impl Deck {
     /// Write a cut into the deck. `ValueError` if it has nothing to write, or
     /// if the input has changed since the cut was planned (plan it again).
     fn apply(&self, cut: &Cut) -> PyResult<()> {
+        // The history held while the input changes, so that edits and undos
+        // from other threads go in its order.
+        let mut done = self.done.lock().unwrap_or_else(|e| e.into_inner());
         let e = self.source.apply_cut(&cut.plan).map_err(invalid)?;
-        self.done.lock().unwrap().push(e);
+        done.push(e);
         Ok(())
     }
 
     /// Undo the last cut applied; false if there is none.
     fn undo(&self) -> PyResult<bool> {
-        let Some(e) = self.done.lock().unwrap().pop() else {
+        let mut done = self.done.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = done.last() else {
             return Ok(false);
         };
-        self.source.restore(&e).map_err(invalid)?;
+        self.source.restore(e).map_err(invalid)?;
+        done.pop();
         Ok(true)
     }
 
@@ -155,11 +160,19 @@ impl Deck {
     }
 
     /// Write the input to `path` (default: the file it was read from).
+    /// `ValueError` if the file read was not UTF-8 (writing it would change
+    /// its other bytes: convert it first).
     #[pyo3(signature = (path = None))]
     fn save(&self, py: Python<'_>, path: Option<PathBuf>) -> PyResult<()> {
         let path = path
             .or_else(|| self.path.clone())
             .ok_or_else(|| invalid("this deck has no file: give a path"))?;
+        if self.source.not_utf8() {
+            return Err(invalid(
+                "the input is not UTF-8: saving it would change its other bytes \
+                 (convert it to UTF-8 first, e.g. with iconv)",
+            ));
+        }
         let text = self.source.to_source();
         py.detach(|| std::fs::write(&path, text))
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("{}: {e}", path.display())))

@@ -693,6 +693,19 @@ def test_deck_cut_refuses_what_it_cannot_do(tmp_path):
     assert llevant.Deck.open(out).text() == deck.text()
 
 
+def test_deck_does_not_save_a_file_that_is_not_utf8(tmp_path):
+    # A Latin-1 `é` in the title: writing the text read would change it.
+    path = tmp_path / "latin1.i"
+    raw = OVERLAPPING.replace("\n", " caf\xe9\n", 1).encode("latin-1")
+    path.write_bytes(raw)
+    deck = llevant.Deck.open(path)
+    with pytest.raises(ValueError, match="not UTF-8"):
+        deck.save()
+    with pytest.raises(ValueError, match="not UTF-8"):
+        deck.save(tmp_path / "other.i")
+    assert path.read_bytes() == raw
+
+
 def test_deck_refuses_a_cut_planned_before_another_even_of_another_cell():
     deck = llevant.Deck.from_text(OVERLAPPING)
     first = deck.cut(2, 1)

@@ -600,8 +600,9 @@ class Deck:
         a `cut` that writes `#keep` (directly or through other cells: the two
         would complement each other), and any input with `U` or `TRCL` on a
         data card (not read). `Cut.warnings` names the cells that write
-        `#keep`, `LIKE` copies of them included (they take in what is cut),
-        and a label of `keep` that no longer fits on its card.
+        `#keep`, and those that change through them (by another `#n` or a
+        `LIKE` copy): they may take in what is cut. And a label of `keep`
+        that no longer fits on its card.
         """
     def apply(self, cut: Cut) -> None:
         """Write a cut into the deck. `ValueError` if it has nothing to write
@@ -615,7 +616,9 @@ class Deck:
     def text(self) -> str:
         """The input as it is now."""
     def save(self, path: Union[str, PathLike[str], None] = None) -> None:
-        """Write the input to `path` (default: the file it was read from)."""
+        """Write the input to `path` (default: the file it was read from).
+        `ValueError` if the file read was not UTF-8 (writing it would change
+        its other bytes: convert it first)."""
 
 @final
 class Model:

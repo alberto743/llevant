@@ -58,8 +58,9 @@ pub struct CutExpand {
     /// The cells that write `#keep` (they take in what is cut), and other
     /// things to look at.
     pub warnings: Vec<String>,
-    /// The cells that write `#keep` (by number): they take in what is cut,
-    /// and may overlap `cut` after it.
+    /// The cells that change with `keep` (by number): those that write
+    /// `#keep`, and in turn those that write `#n` of one of them or copy one
+    /// with `LIKE`. They may take in what is cut, and overlap `cut` after it.
     pub users: Vec<i64>,
 }
 
@@ -82,10 +83,15 @@ pub struct Simplified {
     pub warnings: Vec<String>,
 }
 
+/// The cells that change with the cell cut, each with the cell it changes
+/// through (that cell itself for one that writes its `#n`).
+type Users = Vec<(i64, i64)>;
+
 impl Source {
     /// The checks every cut makes (see [`Source::cut_plan`]): the card of
-    /// `keep`, its geometry, and the cells that write `#keep`.
-    fn cut_checks(&self, keep: i64, cut: i64) -> Result<(String, Expr, Vec<i64>), String> {
+    /// `keep`, its geometry, and the cells that change with it, each with
+    /// the cell it changes through.
+    fn cut_checks(&self, keep: i64, cut: i64) -> Result<(String, Expr, Users), String> {
         if keep == cut {
             return Err(format!("cell {keep} cannot be cut out of itself"));
         }
@@ -102,19 +108,6 @@ impl Source {
             // It takes its universe (and more) from the cell it copies.
             return Err(format!("cell {cut} is a LIKE cell: cut by hand"));
         }
-        let universe = |fields: &super::fields::CellFields| {
-            fields
-                .params
-                .iter()
-                .find(|p| p.key == "u")
-                .map(|p| p.value.trim_start_matches('-').to_string())
-                .unwrap_or_else(|| "0".into())
-        };
-        if universe(&f) != universe(&g) {
-            return Err(format!(
-                "cells {keep} and {cut} are in different universes: they cannot overlap"
-            ));
-        }
         let old_card = self
             .card(CardKind::Cell, keep)
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
@@ -122,6 +115,21 @@ impl Source {
         let tree = self.tree();
         if let Some(why) = placed_by_data_card(&tree, "cut") {
             return Err(why);
+        }
+        // The universes as numbers (`U=01` is universe 1, `U=-1` too).
+        let universe = |n: i64| -> Result<i64, String> {
+            let c = tree
+                .cell(n)
+                .ok_or_else(|| format!("no cell {n} in the input"))?;
+            let u = c
+                .universe()
+                .map_err(|e| format!("cell {n}: {}", e.message))?;
+            Ok(u.unwrap_or(0).abs())
+        };
+        if universe(keep)? != universe(cut)? {
+            return Err(format!(
+                "cells {keep} and {cut} are in different universes: they cannot overlap"
+            ));
         }
         let a = tree
             .cell(keep)
@@ -131,7 +139,9 @@ impl Source {
         if algebra::already_cut(&a, cut) {
             return Err(format!("cell {keep} is cut by #{cut} already"));
         }
-        let mut users = Vec::new();
+        // Each cell, what it stands on: its `LIKE` base and the cells it
+        // writes `#n` of.
+        let mut on: Vec<(i64, Vec<i64>)> = Vec::new();
         for c in tree.cells() {
             let Some(n) = c.id() else { continue };
             if n == keep {
@@ -142,25 +152,28 @@ impl Source {
                     "cell {n} is LIKE {keep} BUT: it would be cut too; cut it by hand"
                 ));
             }
-            let complements = geometry_words(&c.geometry_text())
-                .iter()
-                .any(|w| matches!(w.kind, Word::Cell(m) if m == keep));
-            if complements && !users.contains(&n) {
-                users.push(n);
-            }
+            let mut deps = complemented(&tree, n);
+            deps.extend(c.like());
+            on.push((n, deps));
         }
-        // A `LIKE m BUT` copy of a cell that writes `#keep` writes it too.
+        // The cells the cut changes: those that write `#keep`, and in turn
+        // those that write `#n` of one of them or copy one with `LIKE`
+        // (through two complements a cell grows again: all are listed).
+        // Each with the cell it changes through (`keep` itself for a cell
+        // that writes `#keep`).
+        let mut users: Vec<(i64, i64)> = Vec::new();
+        let mut changed = vec![keep];
         loop {
-            let copies: Vec<i64> = tree
-                .cells()
-                .filter_map(|c| Some((c.id()?, c.like()?)))
-                .filter(|&(n, m)| n != keep && users.contains(&m) && !users.contains(&n))
-                .map(|(n, _)| n)
+            let more: Vec<(i64, i64)> = on
+                .iter()
+                .filter(|(n, _)| users.iter().all(|u| u.0 != *n))
+                .filter_map(|(n, deps)| Some((*n, *deps.iter().find(|d| changed.contains(d))?)))
                 .collect();
-            if copies.is_empty() {
+            if more.is_empty() {
                 break;
             }
-            users.extend(copies);
+            changed.extend(more.iter().map(|u| u.0));
+            users.extend(more);
         }
         if let Some(via) = reaches(&tree, cut, keep) {
             return Err(format!(
@@ -180,13 +193,21 @@ impl Source {
     }
 
     /// The warnings for the cells that write `#keep`.
-    fn user_warnings(keep: i64, cut: i64, users: &[i64]) -> Vec<String> {
+    fn user_warnings(keep: i64, cut: i64, users: &[(i64, i64)]) -> Vec<String> {
         users
             .iter()
-            .map(|n| {
-                format!(
-                    "cell {n} writes #{keep}: it will take in what cell {cut} has of cell {keep}"
-                )
+            .map(|&(n, via)| {
+                if via == keep {
+                    format!(
+                        "cell {n} writes #{keep}: it will take in what cell {cut} has of cell \
+                         {keep}"
+                    )
+                } else {
+                    format!(
+                        "cell {n} changes with cell {via} (through #{via} or LIKE {via}): it may \
+                         take in what cell {cut} has of cell {keep}"
+                    )
+                }
             })
             .collect()
     }
@@ -216,7 +237,7 @@ impl Source {
             empty: e.empty,
             plain: e.plain,
             warnings: e.warnings,
-            users: users.clone(),
+            users: users.iter().map(|u| u.0).collect(),
         };
         plan.warnings.extend(Self::user_warnings(keep, cut, &users));
         if plan.empty {
@@ -532,8 +553,7 @@ fn reaches(tree: &migjorn::Model, from: i64, target: i64) -> Option<i64> {
                 todo.push(m);
             }
         }
-        for w in geometry_words(&c.geometry_text()) {
-            let Word::Cell(m) = w.kind else { continue };
+        for m in complemented(tree, n) {
             if m == target {
                 return Some(n);
             }
@@ -544,6 +564,41 @@ fn reaches(tree: &migjorn::Model, from: i64, target: i64) -> Option<i64> {
         }
     }
     None
+}
+
+/// The cells cell `n` writes `#m` of, as MCNP reads its geometry (a `#` in a
+/// `$` comment is none, one split from its number by a comment is one); read
+/// from its words if the geometry does not parse.
+fn complemented(tree: &migjorn::Model, n: i64) -> Vec<i64> {
+    fn walk(e: &Expr, out: &mut Vec<i64>) {
+        match e {
+            Expr::Surface(_) => {}
+            Expr::Complement(m) => {
+                if !out.contains(m) {
+                    out.push(*m);
+                }
+            }
+            Expr::Not(x) => walk(x, out),
+            Expr::And(v) | Expr::Or(v) => v.iter().for_each(|x| walk(x, out)),
+        }
+    }
+    let Some(c) = tree.cell(n) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    match c.geometry_expr() {
+        Ok(e) => walk(&e, &mut out),
+        Err(_) => {
+            for w in geometry_words(&c.geometry_text()) {
+                if let Word::Cell(m) = w.kind {
+                    if !out.contains(&m) {
+                        out.push(m);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The geometry of cell `n` for a `#n` to expand through: its own, with no
@@ -803,6 +858,60 @@ mod tests {
         let mut users = e.users.clone();
         users.sort_unstable();
         assert_eq!(users, [3, 5, 6]);
+    }
+
+    /// Through other complements: C = #A in a sphere, D = #C, E = #D. When
+    /// A shrinks C grows, D shrinks and E grows again: all three are named,
+    /// E as changing through D.
+    #[test]
+    fn cells_that_change_through_other_complements_are_named() {
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 imp:n=1\n3 0 #1 -3 imp:n=1\n4 0 #3 -3 imp:n=1\n\
+             5 0 #4 -1 imp:n=1\n9 0 3 imp:n=0\n\n1 so 5\n2 sx 4 5\n3 so 50\n\n",
+        );
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        let mut users = e.users.clone();
+        users.sort_unstable();
+        assert_eq!(users, [3, 4, 5]);
+        assert!(
+            e.warnings
+                .iter()
+                .any(|w| w.starts_with("cell 5 changes with cell 4")),
+            "{:?}",
+            e.warnings
+        );
+        assert!(e.warnings.iter().any(|w| w.starts_with("cell 3 writes #1")));
+    }
+
+    /// A `#n` is read as MCNP reads the geometry: one in a `$` comment is
+    /// none (no user, no cycle), one split from its number by a comment is
+    /// one.
+    #[test]
+    fn a_complement_in_a_comment_is_not_one() {
+        // Cell 3 only mentions #1 in a comment.
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 imp:n=1 $ was #1\n3 0 1 -3 imp:n=1 $ see #1\n\
+             9 0 3 imp:n=0\n\n1 so 5\n2 sx 4 5\n3 so 50\n\n",
+        );
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        assert!(e.users.is_empty(), "{:?}", e.users);
+        // Cell 2 writes `#` then a comment, and `1` on the next line: `#1`.
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 # $ note\n     1 imp:n=1\n9 0 2 imp:n=0\n\n\
+             1 so 5\n2 sx 4 5\n\n",
+        );
+        let err = s.cut_expand(1, 2, &Limits::default()).unwrap_err();
+        assert!(err.contains("complement each other"), "{err}");
+    }
+
+    /// Universes are compared as numbers: `U=01` is universe 1.
+    #[test]
+    fn universes_are_compared_as_numbers() {
+        let s = Source::from_str(
+            "t\n1 0 -1 u=01 imp:n=1\n2 0 -2 u=1 imp:n=1\n3 0 -3 fill=1 imp:n=1\n\
+             9 0 3 imp:n=0\n\n1 so 5\n2 sx 4 5\n3 so 50\n\n",
+        );
+        assert!(s.cut_expand(1, 2, &Limits::default()).is_ok());
     }
 
     /// `U` (or `TRCL`) on a data card is not read: a cut, whose checks read

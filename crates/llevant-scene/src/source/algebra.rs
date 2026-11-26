@@ -57,7 +57,7 @@ pub enum Atom {
 }
 
 /// An expression of the algebra.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Bool {
     True,
     False,
@@ -346,7 +346,10 @@ pub fn same(
         let w = to_bool_with(want, cells, lenient, &mut Vec::new(), &mut n).ok()?;
         let g = to_bool_with(got, cells, lenient, &mut Vec::new(), &mut m).ok()?;
         let mut bdd = Bdd::new(limits);
-        Some(bdd.build(&w)? == bdd.build(&g)?)
+        let equal = bdd.build(&w)? == bdd.build(&g)?;
+        // Stopped while it ran (a small proof does not look at the limits
+        // as it goes): no answer.
+        (!limits.over()).then_some(equal)
     };
     match proof(None, false) {
         Some(true) => Some(true),
@@ -568,6 +571,7 @@ pub fn expand_cut(
         e
     };
     let reference = match reference {
+        Ok(_) if limits.over() => return Ok(plain_form("stopped before it was expanded".into())),
         Ok(r) => r,
         Err(why) => return Ok(plain_form(why)),
     };
@@ -591,23 +595,35 @@ pub fn expand_cut(
     // is written, read back from the card: `Source::cut_expand`.)
     let mut bdd = Bdd::new(limits);
     match bdd.build(&reference) {
+        // Stopped is not proven empty (a small build does not look at the
+        // limits as it goes).
+        Some(_) if limits.over() => return Ok(plain_form("stopped before it was proven".into())),
         Some(w) => out.empty = w == FALSE,
         None => return Ok(plain_form("too large to prove equal".into())),
     }
     Ok(out)
 }
 
+/// Whether `#b` is one of the terms `e` intersects, in nested intersections
+/// too (`-1 (-2 #3)`), not under a union.
+fn intersects(e: &Expr, b: i64) -> bool {
+    match e {
+        Expr::Complement(n) => *n == b,
+        Expr::And(items) => items.iter().any(|x| intersects(x, b)),
+        _ => false,
+    }
+}
+
 /// `a #b`: `#b` added to the intersection (nothing added if it is there).
 fn plain(a: &Expr, b: i64) -> Expr {
     let c = Expr::Complement(b);
     match a {
-        Expr::And(items) if items.contains(&c) => a.clone(),
+        _ if intersects(a, b) => a.clone(),
         Expr::And(items) => {
             let mut v = items.clone();
             v.push(c);
             Expr::And(v)
         }
-        _ if *a == c => a.clone(),
         _ => Expr::And(vec![a.clone(), c]),
     }
 }
@@ -1217,6 +1233,10 @@ mod tests {
         let a = parse("-1 #7");
         assert_eq!(plain(&a, 7), a);
         assert_eq!(plain(&parse("#7"), 7), parse("#7"));
+        // In a nested intersection too; under a union it is not a cut.
+        let nested = parse("-1 (-2 #7)");
+        assert!(already_cut(&nested, 7));
+        assert!(!already_cut(&parse("-1 (-2 : #7)"), 7));
     }
 
     #[test]
@@ -1601,6 +1621,39 @@ mod tests {
         let e = parse("-1 2");
         assert_eq!(same(&e, &e, &|_| None, &limits), None);
         assert_eq!(same(&e, &e, &|_| None, &Limits::default()), Some(true));
+    }
+
+    /// Cancelled while a `#n` is looked up: the small proof after it does
+    /// not look at the limits as it goes, and still gives no answer.
+    #[test]
+    fn a_proof_cancelled_during_a_lookup_gives_no_answer() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let limits = Limits {
+            until: None,
+            cancel: Some(stop.clone()),
+        };
+        let cells = |n: i64| {
+            stop.store(true, Ordering::Relaxed);
+            (n == 2).then(|| parse("-1"))
+        };
+        // `#2` is `1`: equal once expanded, but stopped on the way.
+        assert_eq!(same(&parse("#2"), &parse("1"), &cells, &limits), None);
+    }
+
+    /// An expansion stopped before it began is not proven empty: `#b` is
+    /// written as it is.
+    #[test]
+    fn a_stopped_expansion_is_not_empty() {
+        let limits = Limits {
+            until: None,
+            cancel: Some(Arc::new(AtomicBool::new(true))),
+        };
+        let cells = |n: i64| (n == 2).then(|| parse("-1"));
+        let e = expand_cut(&parse("-1 2"), 2, &cells, &limits).unwrap();
+        assert!(!e.empty && e.plain, "{e:?}");
+        assert!(e.warnings.iter().any(|w| w.contains("stopped")), "{e:?}");
+        let free = expand_cut(&parse("-1 2"), 2, &cells, &Limits::default()).unwrap();
+        assert!(free.empty, "{free:?}");
     }
 
     /// Two unions of 256 atoms each, with none shared, are 65 536 products:
