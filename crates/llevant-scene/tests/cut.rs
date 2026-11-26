@@ -197,3 +197,107 @@ fn a_shortened_cut_labels_every_point_as_the_plain_one() {
     assert!(simple.result.terms_after < plain.result.terms_after);
     assert_eq!(who(&a.to_source(), &pts), who(&b.to_source(), &pts));
 }
+
+/// Every pair of overlapping cells of the overlap zoo
+/// (`tools/mcnp-oracle/models/overlaps.i`), cut as the viewer cuts (`#B`
+/// expanded, then simplified) or refused with its reason: each card written
+/// fits MCNP's columns, and the two cells no longer overlap where they met.
+#[test]
+fn the_overlap_zoo_is_cut_or_refused() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tools/mcnp-oracle/models/overlaps.i"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    // (keep, cut, refused with): the clusters of the zoo, both ways round.
+    let cases: &[(i64, i64, Option<&str>)] = &[
+        (101, 102, None),
+        (102, 101, None),
+        (111, 112, None),
+        (112, 111, None),
+        (121, 122, None),
+        (131, 132, None),
+        (132, 133, None),
+        (133, 131, None),
+        (141, 142, None),
+        (142, 141, None),
+        (152, 153, None),
+        (153, 152, None),
+        (161, 162, None),
+        (162, 161, None),
+        (171, 172, None),
+        (172, 173, None),
+        (173, 174, None),
+        (175, 172, None),
+        (181, 182, Some("TRCL")),
+        (182, 181, Some("LIKE")),
+        (183, 182, Some("LIKE")),
+        (184, 185, None),
+        (185, 184, None),
+        (191, 192, None),
+        (185, 191, Some("universes")),
+        (201, 202, None),
+        (202, 201, None),
+        (211, 212, None),
+        (212, 211, None),
+        (222, 223, Some("complement each other")),
+        (223, 222, Some("already")),
+        (224, 221, None),
+    ];
+    let fits = |card: &str| card.lines().all(|l| l.chars().count() <= 128);
+    for &(keep, cut, refused) in cases {
+        let s = Source::from_str(&text);
+        let e = s.cut_expand(keep, cut, &Limits::default());
+        match (refused, e) {
+            (Some(why), Err(err)) => {
+                assert!(err.contains(why), "{keep} #{cut}: {err}");
+                continue;
+            }
+            (Some(why), Ok(_)) => panic!("{keep} #{cut}: not refused ({why})"),
+            (None, Err(err)) => panic!("{keep} #{cut}: {err}"),
+            (None, Ok(e)) if e.empty => continue,
+            (None, Ok(e)) => {
+                assert!(fits(&e.new_card), "{keep} #{cut}:\n{}", e.new_card);
+                s.apply_expand(&e).unwrap();
+            }
+        }
+        let r = s.cell_simplify(keep, &Limits::default()).unwrap();
+        if r.simplified {
+            assert!(fits(&r.new_card), "{keep} #{cut}:\n{}", r.new_card);
+            s.apply_simplified(&r).unwrap();
+        }
+        // Where the two met, they no longer overlap (in universe 0 only: the
+        // cells of universe 1 are placed elsewhere).
+        if keep == 191 {
+            continue;
+        }
+        let m = Model::from_text(&s.to_source(), &Options::default());
+        let (a, b) = (m.cell_index(keep).unwrap(), m.cell_index(cut).unwrap());
+        let (ba, bb) = (m.cell(a).bbox, m.cell(b).bbox);
+        let (lo, hi): (Vec3, Vec3) = (
+            std::array::from_fn(|i| ba.lo[i].max(bb.lo[i])),
+            std::array::from_fn(|i| ba.hi[i].min(bb.hi[i])),
+        );
+        let n = 24;
+        let mut pts = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    let f = |t: usize, d: usize| {
+                        lo[d] + (t as f64 + 0.371) / n as f64 * (hi[d] - lo[d])
+                    };
+                    pts.push([f(i, 0), f(j, 1), f(k, 2)]);
+                }
+            }
+        }
+        let found = reference::classify(&m, &pts, Depth::All);
+        let both = found.labels.iter().any(|l| {
+            l.status == Status::Overlap && l.involved.contains(&a) && l.involved.contains(&b)
+        });
+        assert!(
+            !both,
+            "{keep} #{cut}: still overlapping\n{}",
+            s.cell(keep).unwrap().text
+        );
+    }
+}

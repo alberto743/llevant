@@ -267,7 +267,7 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
         stats.contradictions += s.contradictions;
     }
 
-    // The shortest first; the first one proven equal is the answer.
+    // The forms MCNP can write, the shortest first.
     let mut candidates: Vec<(Expr, usize)> = forms
         .iter()
         .filter_map(to_expr)
@@ -364,7 +364,6 @@ pub fn already_cut(a: &Expr, b: i64) -> bool {
     plain(a, b) == *a
 }
 
-/// `e` with every `#b` in it replaced by `with`.
 /// How many times `e` writes `#b`.
 fn occurrences(e: &Expr, b: i64) -> usize {
     match e {
@@ -375,6 +374,7 @@ fn occurrences(e: &Expr, b: i64) -> usize {
     }
 }
 
+/// `e` with every `#b` in it replaced by `with`.
 fn substitute(e: &Expr, b: i64, with: &Expr) -> Expr {
     match e {
         Expr::Complement(n) if *n == b => with.clone(),
@@ -457,18 +457,14 @@ pub fn shortest(
     })
 }
 
-/// Cell `b` cut out of the cell whose geometry is `a`: `a ∩ #b`.
+/// Cell `b` cut out of the cell whose geometry is `a`: `a ∩ #b`, stopped by
+/// `limits`.
 ///
 /// `cells` gives the geometry of any cell `#n` may name (including `b`), or
 /// `None` for one that cannot be expanded (it has a `TRCL`, is a `LIKE` cell,
 /// or does not exist). Then nothing is expanded, and the plain `A #B` is
 /// given with the reason in `warnings`.
-pub fn cut_expr(a: &Expr, b: i64, cells: &dyn Fn(i64) -> Option<Expr>) -> Result<Cut, String> {
-    cut_expr_within(a, b, cells, &Limits::within(Duration::from_secs(10)))
-}
-
-/// As [`cut_expr`], stopped by `limits`.
-pub fn cut_expr_within(
+pub fn cut_expr(
     a: &Expr,
     b: i64,
     cells: &dyn Fn(i64) -> Option<Expr>,
@@ -1210,7 +1206,7 @@ mod tests {
 
     #[test]
     fn plain_cut_adds_the_complement() {
-        let cut = cut_expr(&parse("-1 : 2"), 7, &|_| None).unwrap();
+        let cut = cut_expr(&parse("-1 : 2"), 7, &|_| None, &Limits::default()).unwrap();
         assert_eq!(cut.geometry, "(-1:2) #7");
         assert!(cut.terms_after <= cut.terms_before, "{cut:?}");
         assert!(cut.warnings[0].contains("cell 7"), "{:?}", cut.warnings);
@@ -1227,7 +1223,7 @@ mod tests {
     fn contradictions_and_absorption_shorten_the_cut() {
         // (-1 : -2) 3 (1 : -3): -1·1 and 3·-3 are 0, what is left is 1 -2 3.
         let cells = [(2, "-1 3")];
-        let cut = cut_expr(&parse("(-1:-2) 3"), 2, &world(&cells)).unwrap();
+        let cut = cut_expr(&parse("(-1:-2) 3"), 2, &world(&cells), &Limits::default()).unwrap();
         assert_eq!(cut.plain, "(-1:-2) 3 #2");
         assert_eq!(cut.geometry, "-2 3 1");
         assert!(cut.simplified);
@@ -1238,7 +1234,7 @@ mod tests {
     #[test]
     fn a_cell_inside_the_other_leaves_nothing() {
         let cells = [(2, "-1")];
-        let cut = cut_expr(&parse("-1 2"), 2, &world(&cells)).unwrap();
+        let cut = cut_expr(&parse("-1 2"), 2, &world(&cells), &Limits::default()).unwrap();
         assert!(cut.empty);
     }
 
@@ -1246,7 +1242,7 @@ mod tests {
     fn disjoint_cells_leave_the_cell_as_it_is() {
         // B = -1 -2, A = 1 3: nothing of A is in B, A ∩ ¬B = A.
         let cells = [(2, "-1 -2")];
-        let cut = cut_expr(&parse("1 3"), 2, &world(&cells)).unwrap();
+        let cut = cut_expr(&parse("1 3"), 2, &world(&cells), &Limits::default()).unwrap();
         assert_eq!(cut.geometry, "1 3");
         assert!(cut.simplified);
     }
@@ -1256,7 +1252,7 @@ mod tests {
         let cells = [(2, "-1 #3"), (3, "2")];
         let w = world(&cells);
         let a = parse("-1 -3");
-        let cut = cut_expr(&a, 2, &w).unwrap();
+        let cut = cut_expr(&a, 2, &w, &Limits::default()).unwrap();
         let got = parse(&cut.geometry);
         for bits in 0..8 {
             let want = eval(&a, bits, &w) && !eval(&w(2).unwrap(), bits, &w);
@@ -1267,7 +1263,7 @@ mod tests {
     #[test]
     fn cycles_and_missing_cells_fall_back_to_the_plain_cut() {
         let cells = [(2, "-1 #2")];
-        let cut = cut_expr(&parse("-1"), 2, &world(&cells)).unwrap();
+        let cut = cut_expr(&parse("-1"), 2, &world(&cells), &Limits::default()).unwrap();
         assert_eq!(cut.geometry, "-1 #2");
         assert!(cut.warnings[0].contains("itself"), "{:?}", cut.warnings);
     }
@@ -1277,7 +1273,13 @@ mod tests {
         // 470.1 and 470.2 are not each other's negation: 470.2 and -470.2 are,
         // and (470.2 : 470.1) 5 minus (470.2 5) is 5 470.1 -470.2.
         let cells = [(2, "470.2 5")];
-        let cut = cut_expr(&parse("(470.2 : 470.1) 5"), 2, &world(&cells)).unwrap();
+        let cut = cut_expr(
+            &parse("(470.2 : 470.1) 5"),
+            2,
+            &world(&cells),
+            &Limits::default(),
+        )
+        .unwrap();
         assert_eq!(cut.geometry, "470.1 5 -470.2");
     }
 
@@ -1320,7 +1322,7 @@ mod tests {
             let a = random(&mut r, 3, &[20, 21]);
             let table = [(20, c20), (21, c21), (22, b)];
             let cells = |n: i64| table.iter().find(|c| c.0 == n).map(|c| c.1.clone());
-            let cut = cut_expr(&a, 22, &cells).unwrap();
+            let cut = cut_expr(&a, 22, &cells, &Limits::default()).unwrap();
             // What the text written reads back as.
             let m =
                 migjorn::Model::parse(&format!("t\n1 0 {} imp:n=1\n\n1 SO 5\n\n", cut.geometry));
@@ -1463,7 +1465,7 @@ mod tests {
         let a = m.cell(1).unwrap().geometry_expr().unwrap();
         let cells = |n: i64| m.cell(n).and_then(|c| c.geometry_expr().ok());
         let t = std::time::Instant::now();
-        let cut = cut_expr_within(&a, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
+        let cut = cut_expr(&a, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
         assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
         assert!(cut.terms_after <= cut.terms_before, "{cut:?}");
     }
@@ -1509,8 +1511,7 @@ mod tests {
         let ea = model.cell(1).unwrap().geometry_expr().unwrap();
         let cells = |n: i64| model.cell(n).and_then(|c| c.geometry_expr().ok());
         let t = std::time::Instant::now();
-        let cut =
-            cut_expr_within(&ea, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
+        let cut = cut_expr(&ea, 2, &cells, &Limits::within(Duration::from_secs(20))).unwrap();
         assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
         assert!(cut.terms_after <= 2 * m + 1, "{}", cut.geometry);
     }

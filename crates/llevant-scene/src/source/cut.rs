@@ -95,17 +95,12 @@ impl Source {
         let g = self
             .cell_fields(cut)
             .ok_or_else(|| format!("no cell {cut} in the input"))?;
-        if f.like.is_some() {
-            return Err(format!("cell {keep} is a LIKE cell: cut it by hand"));
+        if let Some(why) = f.rewrite_refusal(keep, "cut") {
+            return Err(why);
         }
         if g.like.is_some() {
             // It takes its universe (and more) from the cell it copies.
             return Err(format!("cell {cut} is a LIKE cell: cut by hand"));
-        }
-        if f.params.iter().any(|p| p.key == "trcl") {
-            return Err(format!(
-                "cell {keep} has a TRCL, which would move #{cut} with it: cut it by hand"
-            ));
         }
         let universe = |fields: &super::fields::CellFields| {
             fields
@@ -288,11 +283,8 @@ impl Source {
         let f = self
             .cell_fields(keep)
             .ok_or_else(|| format!("no cell {keep} in the input"))?;
-        if f.like.is_some() {
-            return Err(format!("cell {keep} is a LIKE cell: simplify it by hand"));
-        }
-        if f.params.iter().any(|p| p.key == "trcl") {
-            return Err(format!("cell {keep} has a TRCL: simplify it by hand"));
+        if let Some(why) = f.rewrite_refusal(keep, "simplify") {
+            return Err(why);
         }
         let (a, s) = {
             let tree = self.tree();
@@ -373,10 +365,7 @@ impl Source {
     /// Writes an expansion made by [`Source::cut_expand`].
     pub fn apply_expand(&self, plan: &CutExpand) -> Result<Edited, String> {
         if plan.empty {
-            return Err(format!(
-                "cell {} lies inside cell {}: cutting would leave nothing",
-                plan.keep, plan.cut
-            ));
+            return Err(nothing_left(plan.keep, plan.cut));
         }
         self.apply_card(plan.keep, plan.revision, &plan.new_card)
     }
@@ -393,24 +382,28 @@ impl Source {
     /// geometry `A` becomes `A #B`, simplified by Boolean algebra when
     /// `simplify` (`#B` expanded, the other `#n` kept when that is as short;
     /// the card is proven equal to `A ∩ ¬B` from its text, whatever the
-    /// surfaces are; the `algebra` module). The plain `A #B` is
-    /// kept on a tie. Nothing is written: [`Source::apply_cut`] does.
+    /// surfaces are; the `algebra` module), all within [`PLAN_LIMIT`]. The
+    /// plain `A #B` is kept on a tie. Nothing is written: [`Source::apply_cut`]
+    /// does.
     ///
     /// An error for a cell the input has not got, cells in different
     /// universes (`u=` on their cards), a `LIKE` cell, a `keep` with a `TRCL`
     /// (MCNP moves the surfaces of a `#n` by the cell's own `TRCL`), a `keep`
-    /// that a `LIKE` cell copies (that cell would be cut too) and a `keep`
-    /// cut by `#cut` already. A `cut` with a `TRCL`, or `#n` of a cell that
-    /// cannot be expanded, is written as `#n` and not simplified. A warning
-    /// for each cell that writes `#keep`: it then takes in what is cut.
+    /// that a `LIKE` cell copies (that cell would be cut too), a `keep` cut by
+    /// `#cut` already, a `cut` that writes `#keep` (directly or through other
+    /// cells) and any input with `U` or `TRCL` on a data card. A `cut` with a
+    /// `TRCL`, or `#n` of a cell that cannot be expanded, is written as `#n`
+    /// and not simplified. A warning for each cell that writes `#keep`: it
+    /// then takes in what is cut.
     pub fn cut_plan(&self, keep: i64, cut: i64, simplify: bool) -> Result<CutPlan, String> {
         let revision = self.revision();
+        let limits = Limits::within(PLAN_LIMIT);
         let (old_card, a, users) = self.cut_checks(keep, cut)?;
         let mut result = if simplify {
             let tree = self.tree();
-            algebra::cut_expr(&a, cut, &|n| expandable(&tree, n))?
+            algebra::cut_expr(&a, cut, &|n| expandable(&tree, n), &limits)?
         } else {
-            let mut r = algebra::cut_expr(&a, cut, &|_| None)?;
+            let mut r = algebra::cut_expr(&a, cut, &|_| None, &limits)?;
             // Its "cannot be expanded" is the point of a plain cut.
             r.warnings.clear();
             r.trace.clear();
@@ -423,7 +416,7 @@ impl Source {
         if !result.empty {
             new_card = self.cell_with(keep, &[CellChange::Geometry(result.geometry.clone())])?;
             let want = Expr::And(vec![a, Expr::Complement(cut)]);
-            match self.proves(keep, &new_card, &want, &Limits::within(PROOF_LIMIT)) {
+            match self.proves(keep, &new_card, &want, &limits) {
                 Some(true) => {}
                 Some(false) => {
                     return Err("internal error: the card written differs from A #B".into())
@@ -461,22 +454,30 @@ impl Source {
     /// was not as it is now (plan again).
     pub fn apply_cut(&self, plan: &CutPlan) -> Result<Edited, String> {
         if plan.result.empty {
-            return Err(format!(
-                "cell {} lies inside cell {}: cutting would leave nothing",
-                plan.keep, plan.cut
-            ));
+            return Err(nothing_left(plan.keep, plan.cut));
         }
         self.apply_card(plan.keep, plan.revision, &plan.new_card)
     }
 }
 
-/// The longest the proof of a card made by [`Source::cut_plan`] may take.
-const PROOF_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The longest [`Source::cut_plan`] may take, simplification and proof
+/// together.
+const PLAN_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Why a cut of `cut` out of `keep` is not written: nothing is left.
+pub fn nothing_left(keep: i64, cut: i64) -> String {
+    format!("cell {keep} lies inside cell {cut}: cutting would leave nothing")
+}
+
+/// `card` alone in an input of its own, as MCNP reads it.
+fn parse_card(card: &str) -> migjorn::Model {
+    migjorn::Model::parse(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()))
+}
 
 /// The `$` comments (labels) of the card of cell `keep`.
 fn card_labels(card: &str, keep: i64) -> Vec<String> {
-    let m = migjorn::Model::parse(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
-    m.cell(keep)
+    parse_card(card)
+        .cell(keep)
         .map(|c| c.comments().into_iter().map(String::from).collect())
         .unwrap_or_default()
 }
@@ -495,8 +496,8 @@ fn label_warning(keep: i64, old_card: &str, new_card: &str) -> Option<String> {
 /// The geometry of cell `keep` in `card`, as MCNP reads it (the card alone
 /// in an input of its own; a `#n` stays `#n`).
 fn card_geometry(card: &str, keep: i64) -> Result<Expr, String> {
-    let m = migjorn::Model::parse(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
-    m.cell(keep)
+    parse_card(card)
+        .cell(keep)
         .ok_or_else(|| format!("cell {keep}: the card does not read back"))?
         .geometry_expr()
         .map_err(|e| format!("cell {keep}: {}", e.message))

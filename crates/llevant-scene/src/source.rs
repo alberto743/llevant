@@ -22,7 +22,7 @@ mod cut;
 mod fields;
 mod many;
 pub use algebra::{Cut, Limits};
-pub use cut::{CutExpand, CutPlan, Simplified};
+pub use cut::{nothing_left, CutExpand, CutPlan, Simplified};
 pub use fields::{
     coefficient_names, general_forms, geometry_words, wrap_long_lines, CellChange, CellFields,
     Entry, Flag, MaterialFields, Param, Spanned, Word,
@@ -307,7 +307,7 @@ impl Source {
         let mut tree = match revision {
             None => self.tree_mut(),
             Some(r) => self.tree_mut_at(r).ok_or_else(|| {
-                format!("{what} has changed since the cut was planned: plan it again")
+                format!("{what}: the input has changed since this was planned: plan it again")
             })?,
         };
         let (slot, old) = find(&tree, kind, id)

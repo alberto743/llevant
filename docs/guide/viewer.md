@@ -142,46 +142,46 @@ It goes in steps in the inspector, and nothing is written without a button:
 1. The inspector shows cell A's geometry with `#B` added, highlighted in yellow.
    **Apply** or **Cancel**.
 2. After Apply, `#B` is written as what it stands for, the complement of cell B's
-   geometry (the expansion is highlighted in yellow). It is cheap at any size, and exact.
-   A B with a `TRCL` cannot be written out: `#B` stays as it is.
-3. The check of what changed runs (lines traced where cell A changed: it finds, it
-   does not prove). The cut itself is exact, so A and B cannot still overlap unless
-   something is off. What can go wrong is a cell that writes `#A`: it takes in what was
-   cut out of A, and may now overlap B. The inspector says which of these it found:
-   **solved** (and the other cells A still overlaps, if any), the overlap **remains**,
-   or a **new overlap** of B with a cell that writes `#A` (new when a check before the
-   cut looked everywhere the one after did and did not find it; else the inspector only says
-   that they overlap).
-   Only a check of every place where A and B met before the cut (each placement of their
-   universe), started after the cut, counts: if the last check was of another region, or
-   began before Apply, the inspector says the cut is **not checked**, and you check from the
-   Problems panel. If not solved, **Revert**
-   closes the cut and puts the cell back as it was, or **Keep it**. If solved you can
-   **Simplify**, **Revert** or **Keep it**.
-4. **Simplify** shortens the geometry with the laws of Boolean algebra, in the
-   background (it stops after 20 s, and **Cancel** stops it at once). Each other `#n`
-   of the cell is kept when that is as short (it then still follows cell n), else it is
-   written out. The result is proven equal to the geometry as it is, whatever the
-   surfaces are, from the text of the card as it will read back. It is shown as a
-   `diff -u` of the card: the lines removed in red, those added in green, the words that
-   changed marked.
+   geometry (highlighted in yellow): exact, and cheap at any size. A B with a `TRCL`
+   cannot be written out, so `#B` stays.
+3. The check of what changed runs (lines traced where cell A changed: it finds, it does
+   not prove). The cut is exact, so what can go wrong is a cell that writes `#A`: it
+   takes in what was cut out of A, and may now overlap B. The inspector says:
+   - **solved**, naming any other cell A still overlaps: **Simplify**, **Revert** or
+     **Keep it**;
+   - the overlap **remains**, or a **new overlap** of B with a cell that writes `#A`:
+     **Revert** (the cell as it was) or **Keep it**;
+   - **not checked**: as for solved; check from the Problems panel to know more.
+4. **Simplify** shortens the geometry with the laws of Boolean algebra, in the background
+   (it stops after 20 s; **Cancel** stops it at once). Each other `#n` of the cell is kept
+   when that is as short (it then still follows cell n), else written out. The result is
+   proven equal to the geometry as it is, whatever the surfaces are, from the text of the
+   card as it will read back, and shown as a `diff -u` of the card, the words changed
+   marked.
 5. **Accept** writes it (a second edit with its own Undo); **Discard** keeps the geometry
-   as it is after step 2; **Revert** takes the whole cut back. The inspector then goes
-   back to what it was showing.
+   of step 2; **Revert** takes the whole cut back.
 
-Each edit is one Undo and is not saved until you save the input. An A with a `TRCL` (the
-cell that is edited), a `LIKE` cell (as A or as B), a cell that a `LIKE` cell copies and cells
-in different universes are refused, as is a B that writes `#A` (directly or through other
-cells, a `LIKE` cell included: the two would complement each other), and every cut of an
-input that gives `U` or `TRCL` on a data card (llevant reads them from cell cards only). A B with a `TRCL`, or
-another `#n` in A that cannot be written out, is written as `#n` as it is. A cut out of a
-cell cut by `#B` already is refused, and so is one that the algebra proves would leave
-nothing of A (A inside B written so that the laws of Boolean algebra show it; an A inside B
-only by where the surfaces are, such as two concentric spheres, is not detected, and is
-written). A cut is written only if nothing in the
-input changed since it was planned, so edit first and cut after. If the cell's `$`
-label no longer fits on its card, the inspector says so before you apply. The inspector names the
-cells that write `#A` before you apply. Once `#B` is written out, cell A no longer
+A check counts for step 3 only if it covered every place where A and B met before the
+cut (each placement of their universe) and started after Apply; else the cut is "not
+checked". An overlap is called new only when a check before the cut looked everywhere
+the one after did and did not find it.
+
+Each edit is one Undo, and nothing is saved until you save the input. Refused:
+
+- an A with a `TRCL` (the cell edited), a `LIKE` cell as A or B, and a cell that a
+  `LIKE` cell copies;
+- cells in different universes, and an A cut by `#B` already;
+- a B that writes `#A`, directly or through other cells (the two would complement each
+  other);
+- every cut of an input that gives `U` or `TRCL` on a data card (llevant reads them from
+  cell cards only);
+- a cut that the algebra proves would leave nothing of A. An A inside B only by where the
+  surfaces are, such as two concentric spheres, is not detected, and is written.
+
+A B with a `TRCL`, or another `#n` in A that cannot be written out, stays `#n`. A cut is
+written only if nothing in the input changed since it was planned, so edit first and cut
+after. Before Apply, the inspector names the cells that write `#A`, and says so if the
+cell's `$` label no longer fits on its card. Once `#B` is written out, cell A no longer
 follows later edits of cell B.
 
 ![The Check workspace: two overlaps found in the slice, hatched in magenta](../img/viewer-check.png)

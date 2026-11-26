@@ -588,26 +588,27 @@ class Deck:
         """The input text `text`."""
     def cut(self, keep: int, cut: int, *, simplify: bool = True) -> Cut:
         """What cutting cell `cut` out of cell `keep` would do: `#cut` added
-        to its geometry (so the two no longer overlap), and with `simplify`
-        the result put in fewer terms by Boolean algebra alone (`#cut`
-        expanded, the other `#n` kept when that is as short), the card proven
-        equal to `keep` outside `cut` for any surfaces, as it reads back. The
-        plain `#cut` is kept on a tie. Nothing is written.
+        to its geometry, so the two no longer overlap. With `simplify`, the
+        result is put in fewer terms by Boolean algebra alone (`#cut`
+        expanded, the other `#n` kept when that is as short; the plain cut
+        on a tie), and the card is proven equal to `keep` outside `cut` for
+        any surfaces, as it reads back. Nothing is written.
+
         `ValueError` for a cell not in the input, cells in different
-        universes, a `LIKE` cell (`keep` or `cut`), a `keep` with a `TRCL`, a
-        `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already and
-        a `cut` that writes `#keep`, directly or through other cells (the two
-        would complement each other), and any cut of an input that gives `U`
-        or `TRCL` on a data card (not read). `Cut.warnings` names the cells
-        that write `#keep`, `LIKE` copies of them included (they take in what
-        is cut) and a label of `keep` that
-        no longer fits on its card.
+        universes, a `LIKE` cell (`keep` or `cut`), a `keep` with a `TRCL`,
+        a `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already,
+        a `cut` that writes `#keep` (directly or through other cells: the two
+        would complement each other), and any input with `U` or `TRCL` on a
+        data card (not read). `Cut.warnings` names the cells that write
+        `#keep`, `LIKE` copies of them included (they take in what is cut),
+        and a label of `keep` that no longer fits on its card.
         """
     def apply(self, cut: Cut) -> None:
         """Write a cut into the deck. `ValueError` if it has nothing to write
         (the algebra proves `keep` lies inside `cut`; one inside only by where
-        its surfaces are, as concentric spheres, is not found) or if the input has changed in any way since
-        the cut was planned (plan it again: plan and apply one cut at a time).
+        its surfaces are, as concentric spheres, is not found), or if the
+        input has changed in any way since the cut was planned: plan and
+        apply one cut at a time.
         """
     def undo(self) -> bool:
         """Undo the last cut applied; false if there is none."""

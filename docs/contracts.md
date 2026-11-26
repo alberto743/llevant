@@ -57,75 +57,77 @@ that meet an overlap, stopping at it or seeing through it, are not compared.
 ## Cutting a cell out of another
 
 `Source::cut_plan(keep, cut, simplify)` gives cell `keep` the geometry `A ∩ ¬B` (written
-`A #B`, or in fewer terms when `simplify`). The shorter form uses only the laws of
-Boolean algebra on the surface senses as independent variables (a macrobody facet is a
-variable of its own, and so is each `#n` kept), so it is the same region for any
-surfaces. Every call proves it on the card about to be written, read back from its text
-as MCNP reads it (`Source::proves`, `algebra::same`): reduced ordered BDDs of `A ∩ ¬B`
-and of what the card reads as must be the same node, first with each `#n` a variable of
-its own, else with every `#n` expanded by De Morgan. A card proven different is an
-error and nothing is written; one too large to prove is written as the plain `A #B`
-(`source/algebra.rs` tests, among them 400 random cuts compared with truth tables, and
-the BDDs telling a wrong form from a right one; `source/cut.rs`
-`the_card_written_is_proven_from_its_text` tells a card that lost its parentheses). A
-`keep` with a `TRCL`, a `LIKE` cell, a `keep` that a `LIKE` cell copies, a `keep` cut by
-`#cut` already and cells in different universes are refused (the one-step and the
-two-step cuts alike, `cut_checks`); a `cut` with a `TRCL` is written as `#n` and not
-expanded; the cells that write `#keep` are named in the warnings and in
-`CutExpand::users`. `apply_cut` refuses a plan made when `keep`'s card was not as it is
-now (`source/cut.rs` tests). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
+`A #B`, or in fewer terms when `simplify`). The shorter form uses only the laws of Boolean
+algebra on the surface senses as independent variables (a macrobody facet is a variable
+of its own, and so is each `#n` kept), so it is the same region for any surfaces. Every
+card is proven before it is written, read back from its text as MCNP reads it
+(`Source::proves`, `algebra::same`): the reduced ordered BDDs of `A ∩ ¬B` and of the card
+must be the same node, first with each `#n` a variable, else with every `#n` expanded by
+De Morgan. A `#n` that cannot be expanded is the same unknown region on both sides: equal
+so is equal, unequal so says nothing
+(`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one`). A card proven
+different is an error and nothing is written; one too large to prove is written as the
+plain `A #B` (`source/algebra.rs` tests, among them 400 random cuts compared with truth
+tables; `source/cut.rs` `the_card_written_is_proven_from_its_text` tells a card that lost
+its parentheses). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
 keeps its cell, and the simplified and plain cuts label every point alike.
 
-The viewer cuts in two steps, each its own edit. `Source::cut_expand` writes `A` with
-`#B` replaced by the complement of cell B (De Morgan only, so it costs a visit of B's
-geometry at any size); its card is proven equal to `A ∩ ¬B` as above, and `empty` is set
-when nothing is left (`source/cut.rs` tests). `Source::cell_simplify` shortens the
-geometry as it is then, two ways (`algebra::shortest`): with each `#n` kept as a variable,
-and with every `#n` expanded; the shorter wins, the first on a tie
-(`simplify_keeps_the_other_complements`). Each way, `simplify_bool` tries a tree pass first (`source/algebra/tree.rs`: a literal
-known from the products and sums around it is replaced by 0 or 1, `x·¬x = 0`, absorption;
-a random test of 400 expressions checks that each result is the same function and not
-longer), then the disjunctive-normal-form path, on the expression and on its complement
-negated back (an intersection of unions), each only for what has at most 256 products,
-under a time limit and a cancel flag (`Limits`)
+The viewer cuts in two steps, each its own edit. `Source::cut_expand` writes `A` with `#B`
+replaced by the complement of cell B (De Morgan only, a visit of B's geometry at any size),
+proven as above; `empty` is set when nothing is left. `Source::cell_simplify` shortens the
+geometry as it is then, with each `#n` kept and with every `#n` expanded; the shorter
+wins, the first on a tie (`algebra::shortest`, `simplify_keeps_the_other_complements`).
+Each way, `simplify_bool` runs a tree pass first (`source/algebra/tree.rs`: a literal known
+from the products and sums around it is replaced by 0 or 1, `x·¬x = 0`, absorption; 400
+random expressions keep their function and get no longer), then the disjunctive normal
+form, on the expression and on its complement negated back, each only up to 256 products
 (`the_dual_form_shortens_an_intersection_of_unions`,
-`groups_cut_by_planes_stay_short_and_fast`). The shortest form is given only when
-the BDDs prove it equal; the proof or the limits failing gives no form. A cut of 14 groups
-by 16 planes, which took seconds in the normal-form path, is done at once (`algebra.rs`
-tests). Every plan carries the `Source::revision` it was made at: planning fails if the input changed
-while it ran, and `apply_card` writes only if the revision is still that one, the check made
-under the lock that writes, so an edit of any card the plan was proven from (the cut cell's,
-a `#n` it expanded) refuses it too (`a_plan_is_refused_when_a_cell_it_was_proven_from_changed`,
-`a_stale_plan_is_refused`). Revisions are drawn from one counter for the whole process, so no
-two sources share one and a plan is never written into another input
-(`a_plan_is_bound_to_the_input_it_was_made_from`). A cut that would make the two cells write each other's complement,
-directly or through other cells (a `LIKE m BUT` cell counts as writing what m writes, also
-among the cells named as writing `#A`, `a_like_copy_of_a_cell_writing_the_complement_is_named`),
-any cut of an input that gives `U` or `TRCL` on a data card, which is not read
-(`a_cut_is_refused_when_cells_are_placed_by_a_data_card`), and a
-`LIKE` cut cell are refused
-(`a_cut_that_would_make_cells_complement_each_other_is_refused`,
-`a_like_cell_cannot_be_cut_out_of_another`). The Boolean work looks at the limits at the
-start of a proof (and of a simplification: none is given once they are over), every 1024
-steps of it and while absorbing; a tier-1 product with an atom of both senses is a constant and
-absorbs nothing (`a_contradiction_absorbs_nothing`); a `#b` whose copies would be more than a
-proof can take is not expanded (`a_complement_written_too_many_times_is_not_expanded`); and it
-gives up a product of
-unions with over twice the cap of products before absorbing it (absorbing is quadratic), and keeps a product that absorbs below the cap
-(`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one` (a `#n` that cannot be
-expanded is one unknown region on both sides of a proof: equal so is equal; unequal so says
-nothing), `a_cancelled_proof_gives_no_answer`, `a_huge_product_of_unions_is_given_up_at_once`, `products_that_absorb_are_kept_whatever_they_are_before`).
-`crates/llevant-scene/tests/cut.rs` compiles the two steps as well: the expansion fixes
-the overlap and changes nothing else, the simplification labels every point as the
-expansion, and a cell that writes `#A` takes in `A ∩ B` (the overlap the viewer's verdict
-then reports as new, `panels/inspector/cut.rs` `judge` tests). The verdict counts only a
-check that covered everywhere A and B met before the cut, in the model's frame
+`groups_cut_by_planes_stay_short_and_fast`: 14 groups by 16 planes, seconds before, now
+at once). A form is given only when the BDDs prove it equal. `tests/cut.rs` compiles the
+two steps too: the expansion fixes the overlap and changes nothing else, and the
+simplification labels every point as the expansion does. Every overlapping pair of the
+zoo `tools/mcnp-oracle/models/overlaps.i` is cut so, its cards within 128 columns and the
+pair no longer overlapping, or refused with its reason
+(`the_overlap_zoo_is_cut_or_refused`).
+
+Refused, by both paths (`cut_checks`): a `keep` with a `TRCL`; a `LIKE` cell, as `keep`
+or `cut` (`a_like_cell_cannot_be_cut_out_of_another`); a `keep` that a `LIKE` cell
+copies; a `keep` cut by `#cut` already; cells in different universes; a cut that would
+make the two cells write each other's complement, directly or through other cells, a
+`LIKE m BUT` cell counting as writing what m writes
+(`a_cut_that_would_make_cells_complement_each_other_is_refused`); and any input that
+gives `U` or `TRCL` on a data card, which is not read
+(`a_cut_is_refused_when_cells_are_placed_by_a_data_card`). A `cut` with a `TRCL` is
+written as `#n`, not expanded. The cells that write `#keep`, their `LIKE` copies
+included, are named in the warnings and in `CutExpand::users`
+(`a_like_copy_of_a_cell_writing_the_complement_is_named`).
+
+Every plan carries the `Source::revision` it was made at. Planning fails if the input
+changed while it ran, and `apply_card` writes only if the revision is still that one,
+checked under the lock that writes, so an edit of any card the plan was proven from
+refuses it too (`a_plan_is_refused_when_a_cell_it_was_proven_from_changed`,
+`a_stale_plan_is_refused`). Revisions come from one counter for the whole process, so a
+plan is never written into another input
+(`a_plan_is_bound_to_the_input_it_was_made_from`).
+
+The Boolean work stops at its limits (`Limits`: a time limit and a cancel flag), looked
+at when a proof or a simplification starts, every 1024 steps and while absorbing; stopped,
+it gives no form (`a_cancelled_proof_gives_no_answer`). A tier-1 product with an atom of
+both senses absorbs nothing (`a_contradiction_absorbs_nothing`). A `#b` whose copies
+would be more than a proof can take is not expanded
+(`a_complement_written_too_many_times_is_not_expanded`). A product of unions with over
+twice the cap of products before absorbing is given up, and one that absorbs below the cap
+is kept (`a_huge_product_of_unions_is_given_up_at_once`,
+`products_that_absorb_are_kept_whatever_they_are_before`).
+
+The viewer's verdict (`panels/inspector/cut.rs`, `judge`) counts only a check that
+covered every place A and B met before the cut, in the model's frame
 (`cells_meet_where_they_are_placed`; a check covers its boxes only within its region,
-`a_check_covers_its_boxes_only_within_its_region`) and that started after
-the cut was written (`a_check_started_before_the_cut_does_not_judge_it`, `tests/app/editing.rs`).
-An overlap of B with such a cell is called new only against a check before the cut that
-covered everywhere the one after did, and did not find it
+`a_check_covers_its_boxes_only_within_its_region`), and that started after the cut was
+written (`a_check_started_before_the_cut_does_not_judge_it`, `tests/app/editing.rs`). A
+cell that writes `#A` takes in `A ∩ B`. Its overlap with B is called new only against a
+check before the cut that covered everywhere the one after did and did not find it
 (`an_overlap_is_new_only_against_a_check_that_looked_there`).
 
 ## Editing the input
@@ -157,20 +159,20 @@ byte). A geometry with as many terms keeps the card's line breaks; any other is
 written again within 128 columns (`geometry_written_term_by_term`). `wrap_long_lines`
 breaks a line over 128 columns between words, or inside a word of geometry before a `:`
 or a `)` and after a `(` (a union printed without blanks, as the expansion of a `#n`),
-never inside a number or a keyword (nor in what follows the first keyword: a `fill=` range
-`0:0` stays whole, on the line of the keyword or a later one,
-`a_fill_range_is_never_broken_at_its_colon`, `a_fill_range_on_a_continuation_line_is_never_broken`), counting characters, not bytes. A `$` comment stays
-at the end of the last line, with a word moved down to make room, else on a continuation
-line of its own while it fits in 128 columns (still a `$` comment, so a label stays one,
-`a_label_stays_a_label_when_the_card_wraps`), else it becomes `c` lines after it, all of its
-text kept; a cut that makes that happen warns of it before Apply
-(`a_label_that_cannot_stay_a_label_is_warned_of`). Every line
-it writes fits, except a comment line that was too long already and a piece that cannot be
-broken and is longer than the 123 columns a continuation line has after its five blanks,
-which are left as they are (`Source::edit` then refuses the card: nothing is written); and the card reads back
-the same geometry and parameters (`a_union_without_spaces_is_broken_at_its_colons`,
+never inside a number or a keyword, nor in what follows the first keyword: a `fill=`
+range `0:0` stays whole (`a_fill_range_is_never_broken_at_its_colon`,
+`a_fill_range_on_a_continuation_line_is_never_broken`). It counts characters, not bytes.
+A `$` comment stays at the end of the last line, a word moved down to make room, else on
+a continuation line of its own while that fits (still a `$` comment, so a label stays
+one, `a_label_stays_a_label_when_the_card_wraps`), else it becomes `c` lines after the
+card, all of its text kept; a cut that makes that happen warns of it before Apply
+(`a_label_that_cannot_stay_a_label_is_warned_of`). Every line it writes fits, except a
+comment line that was too long already and a piece that cannot be broken and is longer
+than the 123 columns a continuation line has after its five blanks (`Source::edit` then
+refuses the card). The card reads back the same geometry and parameters
+(`a_union_without_spaces_is_broken_at_its_colons`,
 `a_comment_is_kept_and_the_lines_still_fit`, `non_ascii_lines_are_wrapped_by_characters`,
-and 300 random long cards in `random_long_cards_fit_and_read_back_the_same`; a cut by a
+300 random long cards in `random_long_cards_fit_and_read_back_the_same`, and a cut by a
 cell of 40 planes in `source/cut.rs` `a_long_cut_fits_mcnp_columns`).
 Many cards are written as one edit with `Source::edit_many` (all or none: on an error
 the cards written are put back) and taken back with `restore_all`; `cells_with` gives

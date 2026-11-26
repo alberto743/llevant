@@ -58,10 +58,7 @@ pub struct Cut {
 impl Cut {
     fn __str__(&self) -> String {
         if self.empty {
-            return format!(
-                "cell {} lies inside cell {}: nothing to write",
-                self.keep, self.cut
-            );
+            return llevant_scene::source::nothing_left(self.keep, self.cut);
         }
         format!(
             "- {}+ {}({} terms, was {})",
@@ -109,15 +106,9 @@ impl Deck {
         }
     }
 
-    /// What cutting cell `cut` out of cell `keep` would do: `#cut` added to
-    /// its geometry (so the two no longer overlap), and with `simplify` the
-    /// result put in fewer terms by Boolean algebra alone. The result is
-    /// proven equal to `keep ∩ ¬cut` for any surfaces. Nothing is written.
-    /// `ValueError` for a cell not in the input, cells in different
-    /// universes, a `LIKE` cell (`keep` or `cut`), a `keep` with a `TRCL`, a
-    /// `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already and a
-    /// `cut` that writes `#keep` (directly or through other cells: the two
-    /// would complement each other).
+    /// What cutting cell `cut` out of cell `keep` would do, proven equal to
+    /// `keep` outside `cut`; nothing is written. `ValueError`, saying why,
+    /// for a cut that is refused.
     #[pyo3(signature = (keep, cut, *, simplify = true))]
     fn cut(&self, py: Python<'_>, keep: i64, cut: i64, simplify: bool) -> PyResult<Cut> {
         let plan = py
@@ -141,10 +132,8 @@ impl Deck {
         })
     }
 
-    /// Write a cut into the deck. `ValueError` if it has nothing to write or
-    /// the input has changed in any way since the cut was planned (it was
-    /// proven from cells other than `keep` as well): plan it again, so plan
-    /// and apply one cut at a time.
+    /// Write a cut into the deck. `ValueError` if it has nothing to write, or
+    /// if the input has changed since the cut was planned (plan it again).
     fn apply(&self, cut: &Cut) -> PyResult<()> {
         let e = self.source.apply_cut(&cut.plan).map_err(invalid)?;
         self.done.lock().unwrap().push(e);

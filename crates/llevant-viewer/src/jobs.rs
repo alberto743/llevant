@@ -666,11 +666,6 @@ mod tests {
         let run = measure(&m, &spec, &Progress::new(), |_| panic!("partial")).unwrap();
         assert!(run.instances.is_empty());
     }
-}
-
-#[cfg(test)]
-mod coverage_tests {
-    use super::*;
 
     #[test]
     fn a_check_covers_what_one_of_its_boxes_holds() {

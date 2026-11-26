@@ -1,17 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alberto Previti
 // SPDX-License-Identifier: EUPL-1.2
-//! An overlap cut, step by step, as the inspector shows it (see
-//! [`crate::cutflow`]):
-//!
-//! 1. Proposed: the cell with `#B` highlighted in yellow, to apply or cancel;
-//! 2. Written: `#B` expanded, the expansion in yellow;
-//! 3. Verified: whether the check of what changed found the overlap solved,
-//!    remaining, or a new one of B with a cell that writes `#A` (if not
-//!    solved, revert), and, if solved, the button to simplify the geometry;
-//! 4. Simplified: a unified diff, in red and green;
-//! 5. accepted or discarded (or the whole cut reverted).
-//!
-//! Nothing is written without a button.
+//! An overlap cut as the inspector shows it, one section per phase (the
+//! steps: [`crate::cutflow`]). Nothing is written without a button.
 
 use llevant_scene::source::{CutExpand, Simplified};
 
@@ -46,10 +36,7 @@ pub fn section(ui: &mut egui::Ui, doc: &Document, out: &mut Vec<Command>) {
                 close_button(ui, "Close", out);
             }
             Some(Ok(plan)) if plan.empty => {
-                ui.label(format!(
-                    "Cell {} lies inside cell {}: cutting would leave nothing",
-                    plan.keep, plan.cut
-                ));
+                ui.label(llevant_scene::source::nothing_left(plan.keep, plan.cut));
                 close_button(ui, "Close", out);
             }
             Some(Ok(plan)) => proposed(ui, plan, out),
@@ -177,7 +164,8 @@ fn proposed(ui: &mut egui::Ui, plan: &CutExpand, out: &mut Vec<Command>) {
 enum Verdict {
     /// The check is running.
     Running,
-    /// It did not run (the model was not complete).
+    /// No check counts: none ran, or the last one started before the cut
+    /// or did not cover where the two cells met.
     NotChecked,
     /// No overlap of the two cells, and none of B with a cell that writes
     /// `#A`, was found; other cells overlapping A are named.
@@ -330,7 +318,7 @@ fn verifying(
 
 /// The verdict, and what can be done about it.
 fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mut Vec<Command>) {
-    let green = egui::Color32::from_rgb(96, 200, 120);
+    let green = diff::ADDED;
     let revert = revert_button;
     match verdict {
         Verdict::Running => {
@@ -396,25 +384,24 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
             others,
             known,
         } => {
-            let (s, v) = if cells.len() == 1 {
-                ("", "s")
+            let (s, v, they) = if cells.len() == 1 {
+                ("", "s", "it")
             } else {
-                ("s", "")
+                ("s", "", "they")
             };
             let list = cells_list(&cells);
             ui.colored_label(
                 ui.visuals().error_fg_color,
                 if known {
                     format!(
-                        "New overlap: cell{s} {list} now overlap{v} cell {cut}, which the check \
-                         before the cut did not find (they write #{keep}, so they took in what \
-                         was cut out of cell {keep})"
+                        "New overlap: cell{s} {list} now overlap{v} cell {cut}: {they} write{v} \
+                         #{keep}, so took in what was cut"
                     )
                 } else {
                     format!(
-                        "Overlap: cell{s} {list} overlap{v} cell {cut} (they write #{keep}, so \
-                         they may have taken in what was cut out of cell {keep}; no check before \
-                         the cut says whether they overlapped already)"
+                        "Overlap: cell{s} {list} overlap{v} cell {cut}: {they} write{v} #{keep}, so \
+                         may have taken in what was cut (no check before the cut says whether \
+                         {they} overlapped already)"
                     )
                 },
             );

@@ -50,6 +50,23 @@ pub struct CellFields {
     pub geometry: String,
 }
 
+impl CellFields {
+    /// Why the geometry of this card, cell `id`'s, cannot be rewritten by
+    /// llevant (`what`: "cut", "simplify"): a `LIKE` cell has none of its
+    /// own, and MCNP moves the surfaces of a `#n` by the cell's own `TRCL`.
+    pub(super) fn rewrite_refusal(&self, id: i64, what: &str) -> Option<String> {
+        if self.like.is_some() {
+            Some(format!("cell {id} is a LIKE cell: {what} it by hand"))
+        } else if self.params.iter().any(|p| p.key == "trcl") {
+            Some(format!(
+                "cell {id} has a TRCL, which would move its #n with it: {what} it by hand"
+            ))
+        } else {
+            None
+        }
+    }
+}
+
 /// One change of a cell card.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellChange {
@@ -222,14 +239,8 @@ impl Source {
         let f = self
             .cell_fields(id)
             .ok_or_else(|| format!("no cell {id} in the input"))?;
-        if f.like.is_some() {
-            return Err(format!("cell {id} is a LIKE cell: cut it by hand"));
-        }
-        // MCNP moves the surfaces of a `#n` by the cell's own TRCL.
-        if f.params.iter().any(|p| p.key == "trcl") {
-            return Err(format!(
-                "cell {id} has a TRCL, which would move #n with it: cut it by hand"
-            ));
+        if let Some(why) = f.rewrite_refusal(id, "cut") {
+            return Err(why);
         }
         let g = f.geometry;
         let g = if g.contains(':') { format!("({g})") } else { g };
@@ -665,18 +676,25 @@ fn width(s: &str) -> usize {
     s.chars().count()
 }
 
+/// `word` is a cell parameter, or the start of the parameters: it has an
+/// `=`, or starts with a letter or a `*`.
+fn ends_geometry(word: &str) -> bool {
+    word.contains('=') || word.starts_with(|c: char| c.is_ascii_alphabetic() || c == '*')
+}
+
 /// The pieces a line's code can be broken between: its words, and inside a
 /// word of geometry alone (digits, signs, `.`, `:`, `(`, `)`, `#`) before
 /// each `:` and `)` and after each `(`, as MCNP reads a line break as a
 /// blank. Each piece says whether a blank comes before it.
 fn pieces<'a>(code: &'a str, in_geometry: &mut bool) -> Vec<(&'a str, bool)> {
     let mut out = Vec::new();
-    // The geometry ends where the first parameter (`imp:n=1`, `fill=`…, the
-    // first word with an `=`) is: after it a `0:0` is a range of a lattice's
-    // `fill`, whole. (Not at the first word with a letter: a density `-1.2e-3`
-    // comes before the geometry.) `in_geometry` carries it from line to line.
+    // The geometry ends where the first parameter (`imp:n=1`, `fill=`…, or
+    // `u 1`: the first word with an `=` or that starts with a letter or a
+    // `*`) is: after it a `0:0` is a range of a lattice's `fill`, whole. (A
+    // letter inside a word does not end it: a density `-1.2e-3` comes before
+    // the geometry.) `in_geometry` carries it from line to line.
     for word in code.split_whitespace() {
-        *in_geometry &= !word.contains('=');
+        *in_geometry &= !ends_geometry(word);
         let geometry = *in_geometry && word.chars().all(|c| "0123456789+-.:()#".contains(c));
         let mut start = 0;
         let mut blank = true;
@@ -783,7 +801,7 @@ pub fn wrap_long_lines(card: &str) -> String {
         }
         if width(body) <= max {
             let code = body.split('$').next().unwrap_or("");
-            in_geometry &= !code.contains('=');
+            in_geometry &= !code.split_whitespace().any(ends_geometry);
             out.push_str(line);
             continue;
         }
@@ -1164,6 +1182,20 @@ m2 1001 2
             for r in ["fill=0:0", "0:1", "-1:1"] {
                 assert!(words(&w).contains(&r.to_string()), "{n}: {r} broken:\n{w}");
             }
+            assert_eq!(words(&w), words(&card), "{n}:\n{w}");
+        }
+    }
+
+    /// Parameters written without `=` (`u 1 lat 1 fill 0:0 …`): the ranges
+    /// still follow a keyword, and stay whole.
+    #[test]
+    fn a_fill_range_without_equals_is_never_broken() {
+        let tail = "u 1 lat 1 fill 0:0 0:1 -1:1 1 2 3 4 5 6";
+        for n in 20..40 {
+            let card = format!("1 0 {} {tail}\n", vec!["-1 2"; n].join(" "));
+            let w = wrap_long_lines(&card);
+            assert!(fits(&w), "{n}:\n{w}");
+            let words = |t: &str| t.split_whitespace().map(String::from).collect::<Vec<_>>();
             assert_eq!(words(&w), words(&card), "{n}:\n{w}");
         }
     }
