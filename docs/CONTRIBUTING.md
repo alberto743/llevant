@@ -85,6 +85,16 @@ PROPTEST_RNG_SEED=20261031 cargo test --release   # property tests with CI's see
 cd crates/llevant-py && maturin develop --release && pytest tests   # Python (a venv with numpy)
 ```
 
+Without a GPU or a Rust toolchain, the GPU and viewer tests run in a throwaway container
+on lavapipe (podman or docker; the build cache in a named volume):
+
+```sh
+podman run --rm -v "$PWD":/work:Z -v llevant-target:/target -e CARGO_TARGET_DIR=/target \
+  -e LLEVANT_GPU_REQUIRED=1 -w /work docker.io/library/rust:1.95 bash -c '
+  apt-get update -q && apt-get install -yq mesa-vulkan-drivers libvulkan1 libxkbcommon0 \
+    libwayland-client0 libx11-6 && cargo test -p llevant-gpu -p llevant-viewer'
+```
+
 Checks and benchmarks on any model (`llevant-bench`; `cargo run --release -p llevant-bench`
 lists every command):
 
