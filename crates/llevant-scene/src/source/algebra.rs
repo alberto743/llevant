@@ -416,7 +416,9 @@ pub fn shortest(
         Some(b) => match cells(b) {
             // Each `#b` becomes a copy of b: not more than a proof can take.
             Some(g) if occurrences(e, b).saturating_mul(terms(&g)) > MAX_NODES => {
-                return Ok(none(format!("cell {b} is written too many times to expand")))
+                return Ok(none(format!(
+                    "cell {b} is written too many times to expand"
+                )))
             }
             Some(g) => substitute(e, b, &Expr::Not(Box::new(g))),
             None => {
@@ -1541,7 +1543,10 @@ mod tests {
         let cells = |n: i64| (n == 9).then(|| big.clone());
         let s = shortest(&e, Some(9), &cells, &Limits::default()).unwrap();
         assert!(s.expr.is_none(), "{s:?}");
-        assert!(s.warnings.iter().any(|w| w.contains("too many times")), "{s:?}");
+        assert!(
+            s.warnings.iter().any(|w| w.contains("too many times")),
+            "{s:?}"
+        );
     }
 
     #[test]

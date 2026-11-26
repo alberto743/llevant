@@ -92,6 +92,40 @@ fn simplified_and_plain_cuts_label_every_point_alike() {
     assert_eq!(who(&a.to_source(), &pts), who(&b.to_source(), &pts));
 }
 
+/// A cut that the algebra shortens: cell 1 cut by cell 2 is `1 -2 3`.
+const UNION: &str = "union
+1 0 (-1:-2) 3 imp:n=1
+2 0 -1 3 imp:n=1
+3 0 #2 #1 -4 imp:n=0
+4 0 4 imp:n=0
+
+1 so 5
+2 so 9
+3 px 0
+4 so 50
+
+";
+
+/// The viewer's two steps on a cut that the second shortens: the
+/// simplification is written, and labels every point as the expansion.
+#[test]
+fn the_second_step_shortens_and_changes_no_point() {
+    let pts = grid();
+    let s = Source::from_str(UNION);
+    let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+    s.apply_expand(&e).unwrap();
+    let expanded = who(&s.to_source(), &pts);
+    let r = s.cell_simplify(1, &Limits::default()).unwrap();
+    assert!(r.simplified, "{r:?}");
+    s.apply_simplified(&r).unwrap();
+    assert_ne!(
+        s.cell(1).unwrap().text,
+        e.new_card,
+        "a shorter card written"
+    );
+    assert_eq!(who(&s.to_source(), &pts), expanded, "{}", r.new_card);
+}
+
 /// The viewer's two steps (`#B` expanded, then simplified) fix the overlap
 /// as the one-step cut does, and the simplification labels every point as
 /// the expansion.
@@ -150,21 +184,9 @@ fn a_cell_writing_the_complement_of_the_cut_one_may_overlap_after() {
 /// plain cut.
 #[test]
 fn a_shortened_cut_labels_every_point_as_the_plain_one() {
-    const DECK: &str = "union
-1 0 (-1:-2) 3 imp:n=1
-2 0 -1 3 imp:n=1
-3 0 #2 #1 -4 imp:n=0
-4 0 4 imp:n=0
-
-1 so 5
-2 so 9
-3 px 0
-4 so 50
-
-";
     let pts = grid();
-    let a = Source::from_str(DECK);
-    let b = Source::from_str(DECK);
+    let a = Source::from_str(UNION);
+    let b = Source::from_str(UNION);
     let plain = a.cut_plan(1, 2, false).unwrap();
     let simple = b.cut_plan(1, 2, true).unwrap();
     a.apply_cut(&plain).unwrap();

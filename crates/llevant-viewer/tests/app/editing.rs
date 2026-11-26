@@ -1465,7 +1465,15 @@ fn accept_during_a_save_keeps_the_simplification_shown() {
                 _ => false,
             })
     });
-    let simplified = match &h.state().document().unwrap().cut_flow.as_ref().unwrap().phase {
+    let simplified = match &h
+        .state()
+        .document()
+        .unwrap()
+        .cut_flow
+        .as_ref()
+        .unwrap()
+        .phase
+    {
         llevant_viewer::cutflow::Phase::Simplifying { slot, .. } => {
             llevant_viewer::cutflow::read(slot, |r| r.unwrap().clone().unwrap())
         }
@@ -1474,7 +1482,11 @@ fn accept_during_a_save_keeps_the_simplification_shown() {
     let ctx = h.ctx.clone();
     h.state_mut().send(Command::SaveInput, &ctx);
     h.state_mut().send(Command::CutAccept(simplified), &ctx);
-    assert_eq!(flow_phase(&h), "simplifying", "the simplification stays shown");
+    assert_eq!(
+        flow_phase(&h),
+        "simplifying",
+        "the simplification stays shown"
+    );
     assert_eq!(h.state().input_edits().0, 1, "nothing written");
     h.run_steps(10);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1590,37 +1602,23 @@ fn the_cut_buttons_open_and_close_the_cut() {
     });
     h.run_steps(3);
     assert_eq!(flow_phase(&h), "none");
-    let button = |h: &Harness<'_, ViewerApp>| {
-        h.get_all_by_label_contains(icons::CLIP)
-            .find(|n| {
-                n.accesskit_node()
-                    .label()
-                    .is_some_and(|l| l.contains(" from "))
-            })
-            .map(|n| n.rect())
+    // The button of the cut of 4 out of 2, and no other: both clicks on it.
+    let label = format!("{} #4 from 2", icons::CLIP);
+    let click = |h: &mut Harness<'_, ViewerApp>| {
+        h.get_all_by_label(&label)
+            .next()
+            .expect("the #4 from 2 button")
+            .click();
     };
-    h.get_all_by_label_contains(icons::CLIP)
-        .find(|n| {
-            n.accesskit_node()
-                .label()
-                .is_some_and(|l| l.contains(" from "))
-        })
-        .expect("a cut button")
-        .click();
+    click(&mut h);
     step_until(&mut h, "the plan", |a| {
         a.document().is_some_and(|d| d.cut_flow.is_some())
     });
     h.run_steps(3);
-    h.get_by_label_contains("Cut #");
-    assert!(button(&h).is_some());
-    h.get_all_by_label_contains(icons::CLIP)
-        .find(|n| {
-            n.accesskit_node()
-                .label()
-                .is_some_and(|l| l.contains(" from ") && !l.contains("Cut"))
-        })
-        .expect("the button again")
-        .click();
+    h.get_by_label_contains("Cut #4 from cell 2");
+    let f = h.state().document().unwrap().cut_flow.as_ref().unwrap();
+    assert_eq!((f.keep, f.cut), (2, 4), "the button opens the cut it names");
+    click(&mut h);
     h.run_steps(3);
     assert_eq!(flow_phase(&h), "none", "a second click closes it");
     let _ = std::fs::remove_dir_all(&dir);

@@ -380,7 +380,11 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
             others,
             known,
         } => {
-            let (s, v) = if cells.len() == 1 { ("", "s") } else { ("s", "") };
+            let (s, v) = if cells.len() == 1 {
+                ("", "s")
+            } else {
+                ("s", "")
+            };
             let list = cells_list(&cells);
             ui.colored_label(
                 ui.visuals().error_fg_color,

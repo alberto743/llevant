@@ -507,7 +507,11 @@ mod tests {
     #[test]
     fn a_comment_inside_a_group_does_not_end_it() {
         let lines = display_lines("2 0 (-2 $ note )\n     : -4) 3 imp:n=1");
-        assert_eq!(lines, ["2 0", "(-2 : -4)", "$ note )", "3", "imp:n=1"], "{lines:?}");
+        assert_eq!(
+            lines,
+            ["2 0", "(-2 : -4)", "$ note )", "3", "imp:n=1"],
+            "{lines:?}"
+        );
     }
 
     #[test]
