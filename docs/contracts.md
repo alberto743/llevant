@@ -150,14 +150,16 @@ written again within 128 columns (`geometry_written_term_by_term`). `wrap_long_l
 breaks a line over 128 columns between words, or inside a word of geometry before a `:`
 or a `)` and after a `(` (a union printed without blanks, as the expansion of a `#n`),
 never inside a number or a keyword (nor in what follows the first keyword: a `fill=` range
-`0:0` stays whole, `a_fill_range_is_never_broken_at_its_colon`), counting characters, not bytes. A `$` comment stays
+`0:0` stays whole, on the line of the keyword or a later one,
+`a_fill_range_is_never_broken_at_its_colon`, `a_fill_range_on_a_continuation_line_is_never_broken`), counting characters, not bytes. A `$` comment stays
 at the end of the last line, with a word moved down to make room, else on a continuation
 line of its own while it fits in 128 columns (still a `$` comment, so a label stays one,
 `a_label_stays_a_label_when_the_card_wraps`), else it becomes `c` lines after it, all of its
 text kept; a cut that makes that happen warns of it before Apply
 (`a_label_that_cannot_stay_a_label_is_warned_of`). Every line
 it writes fits, except a comment line that was too long already and a piece that cannot be
-broken (a word longer than a line), which are left as they are; and the card reads back
+broken and is longer than the 123 columns a continuation line has after its five blanks,
+which are left as they are (`Source::edit` then refuses the card: nothing is written); and the card reads back
 the same geometry and parameters (`a_union_without_spaces_is_broken_at_its_colons`,
 `a_comment_is_kept_and_the_lines_still_fit`, `non_ascii_lines_are_wrapped_by_characters`,
 and 300 random long cards in `random_long_cards_fit_and_read_back_the_same`; a cut by a

@@ -669,16 +669,15 @@ fn width(s: &str) -> usize {
 /// word of geometry alone (digits, signs, `.`, `:`, `(`, `)`, `#`) before
 /// each `:` and `)` and after each `(`, as MCNP reads a line break as a
 /// blank. Each piece says whether a blank comes before it.
-fn pieces(code: &str) -> Vec<(&str, bool)> {
+fn pieces<'a>(code: &'a str, in_geometry: &mut bool) -> Vec<(&'a str, bool)> {
     let mut out = Vec::new();
     // The geometry ends where the first parameter (`imp:n=1`, `fill=`…, the
     // first word with an `=`) is: after it a `0:0` is a range of a lattice's
     // `fill`, whole. (Not at the first word with a letter: a density `-1.2e-3`
-    // comes before the geometry.)
-    let mut in_geometry = true;
+    // comes before the geometry.) `in_geometry` carries it from line to line.
     for word in code.split_whitespace() {
-        in_geometry &= !word.contains('=');
-        let geometry = in_geometry && word.chars().all(|c| "0123456789+-.:()#".contains(c));
+        *in_geometry &= !word.contains('=');
+        let geometry = *in_geometry && word.chars().all(|c| "0123456789+-.:()#".contains(c));
         let mut start = 0;
         let mut blank = true;
         if geometry {
@@ -760,6 +759,9 @@ pub fn wrap_long_lines(card: &str) -> String {
         return card.to_string();
     }
     let mut out = String::new();
+    // Whether the geometry goes on: it ends at the first parameter, on
+    // whichever line that is (a `fill=` range on the next line is whole).
+    let mut in_geometry = true;
     for line in card.split_inclusive('\n') {
         let (body, end) = match line.strip_suffix("\r\n") {
             Some(b) => (b, "\r\n"),
@@ -775,7 +777,13 @@ pub fn wrap_long_lines(card: &str) -> String {
                 && (t.eq_ignore_ascii_case("c")
                     || (t.starts_with(['c', 'C']) && t[1..].starts_with([' ', '\t'])))
         };
-        if width(body) <= max || comment {
+        if comment {
+            out.push_str(line);
+            continue;
+        }
+        if width(body) <= max {
+            let code = body.split('$').next().unwrap_or("");
+            in_geometry &= !code.contains('=');
             out.push_str(line);
             continue;
         }
@@ -789,7 +797,7 @@ pub fn wrap_long_lines(card: &str) -> String {
         // Pieces packed into lines of at most `BREAK_AT` columns.
         let mut lines: Vec<Vec<(&str, bool)>> = vec![Vec::new()];
         let mut used = width(lead);
-        for (piece, blank) in pieces(code) {
+        for (piece, blank) in pieces(code, &mut in_geometry) {
             let cur = lines.last_mut().expect("one line");
             let add = width(piece) + usize::from(blank && !cur.is_empty());
             if !cur.is_empty() && used + add > BREAK_AT {
@@ -1154,6 +1162,31 @@ m2 1001 2
             assert!(fits(&w), "{n}:\n{w}");
             let words = |t: &str| t.split_whitespace().map(String::from).collect::<Vec<_>>();
             for r in ["fill=0:0", "0:1", "-1:1"] {
+                assert!(words(&w).contains(&r.to_string()), "{n}: {r} broken:\n{w}");
+            }
+            assert_eq!(words(&w), words(&card), "{n}:\n{w}");
+        }
+    }
+
+    /// A `fill=` at the end of one line: the ranges on the next are its, and
+    /// whole, wherever that line is broken.
+    #[test]
+    fn a_fill_range_on_a_continuation_line_is_never_broken() {
+        let note = "x".repeat(60);
+        for n in 80..125 {
+            let card = format!(
+                "1 0 -1 u=1 lat=1 fill=\n{}-1:0 0:0 0:0 1 1 $ {note}\n",
+                " ".repeat(n)
+            );
+            let w = wrap_long_lines(&card);
+            let words = |t: &str| -> Vec<String> {
+                t.lines()
+                    .map(|l| l.split('$').next().unwrap_or(""))
+                    .filter(|l| !l.trim_start().starts_with(['c', 'C']))
+                    .flat_map(|l| l.split_whitespace().map(String::from))
+                    .collect()
+            };
+            for r in ["-1:0", "0:0"] {
                 assert!(words(&w).contains(&r.to_string()), "{n}: {r} broken:\n{w}");
             }
             assert_eq!(words(&w), words(&card), "{n}:\n{w}");
