@@ -103,13 +103,12 @@ fn pass(b: &Bool, known: &mut HashMap<Atom, bool>, stats: &mut Stats) -> Bool {
     // The terms stay in the order they were written (the result is shown as
     // a diff of the cell as it was).
     let mut out: Vec<Bool> = Vec::new();
-    let mut emitted: Vec<Atom> = Vec::new();
+    let mut emitted: std::collections::HashSet<Atom> = Default::default();
     let mut result = None;
     for it in &flat {
         if let Bool::Lit(a, _) = it {
             if let Some(p) = lits.get(a) {
-                if !emitted.contains(a) {
-                    emitted.push(*a);
+                if emitted.insert(*a) {
                     out.push(Bool::Lit(*a, *p));
                 }
             }
@@ -127,11 +126,23 @@ fn pass(b: &Bool, known: &mut HashMap<Atom, bool>, stats: &mut Stats) -> Bool {
         let mut again = Vec::new();
         flatten(std::slice::from_ref(&r), and, &mut again);
         for x in again {
+            // A literal against one of the other sense: the product (or
+            // sum) is a constant.
+            if let Bool::Lit(a, p) = x {
+                if out.contains(&Bool::Lit(*a, !*p)) {
+                    stats.contradictions += 1;
+                    result = Some(zero.clone());
+                    break;
+                }
+            }
             if !out.contains(x) {
                 out.push(x.clone());
             } else {
                 stats.absorbed += 1;
             }
+        }
+        if result.is_some() {
+            break;
         }
     }
     for a in set {
@@ -179,13 +190,17 @@ fn literals(b: &Bool, and: bool) -> Option<BTreeMap<Atom, bool>> {
     }
 }
 
+/// The literals of `v`, if it holds only literals and no atom of both
+/// senses (a contradiction absorbs nothing: it is a constant).
 fn lits_of(v: &[Bool]) -> Option<BTreeMap<Atom, bool>> {
-    v.iter()
-        .map(|x| match x {
-            Bool::Lit(a, p) => Some((*a, *p)),
-            _ => None,
-        })
-        .collect()
+    let mut m = BTreeMap::new();
+    for x in v {
+        let Bool::Lit(a, p) = x else { return None };
+        if m.insert(*a, *p).is_some_and(|q| q != *p) {
+            return None;
+        }
+    }
+    Some(m)
 }
 
 /// `ab + abc = ab` and `(a+b)(a+b+c) = (a+b)`: of the terms made of literals

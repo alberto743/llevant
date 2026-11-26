@@ -214,6 +214,13 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
         trace: Vec::new(),
         warnings: Vec::new(),
     };
+    // Stopped before it began: no form (a small proof would not reach the
+    // checks made as the work goes).
+    if limits.over() {
+        out.warnings
+            .push("not simplified: stopped before it began".into());
+        return Ok(out);
+    }
     let mut stats = Stats::new(limits, MAX_CUBES);
     let normal = nnf(reference, false, &mut stats);
     let mut bdd = Bdd::new(limits);
@@ -358,6 +365,16 @@ pub fn already_cut(a: &Expr, b: i64) -> bool {
 }
 
 /// `e` with every `#b` in it replaced by `with`.
+/// How many times `e` writes `#b`.
+fn occurrences(e: &Expr, b: i64) -> usize {
+    match e {
+        Expr::Surface(_) => 0,
+        Expr::Complement(n) => usize::from(*n == b),
+        Expr::Not(x) => occurrences(x, b),
+        Expr::And(v) | Expr::Or(v) => v.iter().map(|x| occurrences(x, b)).sum(),
+    }
+}
+
 fn substitute(e: &Expr, b: i64, with: &Expr) -> Expr {
     match e {
         Expr::Complement(n) if *n == b => with.clone(),
@@ -397,6 +414,10 @@ pub fn shortest(
     };
     let kept = match open {
         Some(b) => match cells(b) {
+            // Each `#b` becomes a copy of b: not more than a proof can take.
+            Some(g) if occurrences(e, b).saturating_mul(terms(&g)) > MAX_NODES => {
+                return Ok(none(format!("cell {b} is written too many times to expand")))
+            }
             Some(g) => substitute(e, b, &Expr::Not(Box::new(g))),
             None => {
                 return Ok(none(format!(
@@ -1492,6 +1513,37 @@ mod tests {
         assert!(cut.terms_after <= 2 * m + 1, "{}", cut.geometry);
     }
 
+    /// `((x:(z -z)) (-x:(w -w))) : (-x y)`: the first product becomes
+    /// `x -x`, a contradiction, which must not absorb `-x y`.
+    #[test]
+    fn a_contradiction_absorbs_nothing() {
+        let l = |id: i64, p: bool| Bool::Lit(Atom::Surface { id, facet: None }, p);
+        let (x, y, z, w) = (1, 2, 3, 4);
+        let b = Bool::Or(vec![
+            Bool::And(vec![
+                Bool::Or(vec![l(x, true), Bool::And(vec![l(z, true), l(z, false)])]),
+                Bool::Or(vec![l(x, false), Bool::And(vec![l(w, true), l(w, false)])]),
+            ]),
+            Bool::And(vec![l(x, false), l(y, true)]),
+        ]);
+        let s = simplify_bool(&b, &Limits::default()).unwrap();
+        assert!(!s.empty, "{s:?}");
+        assert_eq!(s.terms, 2, "{s:?}");
+    }
+
+    /// A `#b` written so many times that its copies would be too many to
+    /// prove is not expanded (rather than copied first and refused after).
+    #[test]
+    fn a_complement_written_too_many_times_is_not_expanded() {
+        let words: Vec<String> = (1..=1000).map(|k| format!("-{k}")).collect();
+        let big = parse(&words.join(" "));
+        let e = Expr::Or((0..200).map(|_| Expr::Complement(9)).collect());
+        let cells = |n: i64| (n == 9).then(|| big.clone());
+        let s = shortest(&e, Some(9), &cells, &Limits::default()).unwrap();
+        assert!(s.expr.is_none(), "{s:?}");
+        assert!(s.warnings.iter().any(|w| w.contains("too many times")), "{s:?}");
+    }
+
     #[test]
     fn cancelling_stops_the_work() {
         let stop = Arc::new(AtomicBool::new(true));
@@ -1501,9 +1553,15 @@ mod tests {
         };
         let mut seed = 7u64;
         let b = random_nnf(&mut seed, 6, 4);
-        // Stopped before it began: the tier-1 form, or no form, never a wrong one.
-        let s = simplify_bool(&b, &limits);
-        assert!(s.is_ok() || s.is_err_and(|e| !e.contains("internal")));
+        // Stopped before it began: no form.
+        let s = simplify_bool(&b, &limits).unwrap();
+        assert!(s.expr.is_none() && !s.empty, "{s:?}");
+        // `x ∧ (x ∨ y)`: no form when stopped, `x` with the work let run.
+        let lit = |id: i64| Bool::Lit(Atom::Surface { id, facet: None }, true);
+        let xy = Bool::And(vec![lit(1), Bool::Or(vec![lit(1), lit(2)])]);
+        assert!(simplify_bool(&xy, &limits).unwrap().expr.is_none());
+        let free = simplify_bool(&xy, &Limits::default()).unwrap();
+        assert_eq!(free.terms, 1, "{free:?}");
     }
 
     /// What absorbs is not lost to the cap on what is written before
