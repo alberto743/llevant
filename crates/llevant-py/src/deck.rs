@@ -41,7 +41,8 @@ pub struct Cut {
     /// The geometry is shorter than the plain one.
     #[pyo3(get)]
     pub simplified: bool,
-    /// `keep` lies inside `cut`: there is nothing to write.
+    /// The algebra proves `keep` lies inside `cut`: there is nothing to
+    /// write (one inside only by where its surfaces are is not found).
     #[pyo3(get)]
     pub empty: bool,
     /// The laws of Boolean algebra applied, with how many times.

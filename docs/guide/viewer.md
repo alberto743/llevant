@@ -143,6 +143,7 @@ It goes in steps in the inspector, and nothing is written without a button:
    **Apply** or **Cancel**.
 2. After Apply, `#B` is written as what it stands for, the complement of cell B's
    geometry (the expansion is highlighted in yellow). It is cheap at any size, and exact.
+   A B with a `TRCL` cannot be written out: `#B` stays as it is.
 3. The check of what changed runs (lines traced where cell A changed: it finds, it
    does not prove). The cut itself is exact, so A and B cannot still overlap unless
    something is off. What can go wrong is a cell that writes `#A`: it takes in what was
@@ -167,12 +168,15 @@ It goes in steps in the inspector, and nothing is written without a button:
    as it is after step 2; **Revert** takes the whole cut back. The inspector then goes
    back to what it was showing.
 
-Each edit is one Undo and is not saved until you save the input. A cell with a `TRCL`, a
-`LIKE` cell (as A or as B), a cell that a `LIKE` cell copies and cells in different
-universes are refused, as is a B that writes `#A` (directly or through other cells: the
-two would complement each other). A B with a `TRCL`, or another `#n` in A that cannot be
-written out, is written as `#n` as it is; cutting a cell out of one that lies inside it,
-or out of one cut by `#B` already, is refused. A cut is written only if nothing in the
+Each edit is one Undo and is not saved until you save the input. An A with a `TRCL` (the
+cell that is edited), a `LIKE` cell (as A or as B), a cell that a `LIKE` cell copies and cells
+in different universes are refused, as is a B that writes `#A` (directly or through other
+cells, a `LIKE` cell included: the two would complement each other). A B with a `TRCL`, or
+another `#n` in A that cannot be written out, is written as `#n` as it is. A cut out of a
+cell cut by `#B` already is refused, and so is one that the algebra proves would leave
+nothing of A (A inside B written so that the laws of Boolean algebra show it; an A inside B
+only by where the surfaces are, such as two concentric spheres, is not detected, and is
+written). A cut is written only if nothing in the
 input changed since it was planned, so edit first and cut after. If the cell's `$`
 label no longer fits on its card, the inspector says so before you apply. The inspector names the
 cells that write `#A` before you apply. Once `#B` is written out, cell A no longer

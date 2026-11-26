@@ -603,7 +603,8 @@ class Deck:
         """
     def apply(self, cut: Cut) -> None:
         """Write a cut into the deck. `ValueError` if it has nothing to write
-        (`keep` lies inside `cut`) or if the input has changed in any way since
+        (the algebra proves `keep` lies inside `cut`; one inside only by where
+        its surfaces are, as concentric spheres, is not found) or if the input has changed in any way since
         the cut was planned (plan it again: plan and apply one cut at a time).
         """
     def undo(self) -> bool:
