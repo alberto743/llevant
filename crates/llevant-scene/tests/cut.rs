@@ -319,6 +319,13 @@ fn the_overlap_zoo_is_cut_or_refused() {
         let found = reference::classify(&m, pts, Depth::All);
         for (p, &id) in pts.iter().zip(&found.ids) {
             let l = &found.labels[id as usize];
+            // A gap is not B, even one inside a filled B (on its path).
+            assert_ne!(
+                l.status,
+                Status::Gap,
+                "{keep} #{cut} ({step}): a gap at {p:?}\n{}",
+                s.cell(keep).unwrap().text
+            );
             let cells: Vec<u32> = match l.status {
                 // B may be filled: the cell that holds the point is below it.
                 Status::Inside => l.path.iter().map(|s| s.cell).collect(),

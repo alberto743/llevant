@@ -149,7 +149,8 @@ It goes in steps in the inspector, and nothing is written without a button:
    takes in what was cut out of A, and may now overlap B. The inspector says:
    - **solved**, naming any other cell A still overlaps: **Simplify**, **Revert** or
      **Keep it**;
-   - the overlap **remains**, or a **new overlap** of B with a cell that writes `#A`:
+   - the overlap **remains**, or a **new overlap** of B with a cell that writes `#A`
+     (directly or through other cells):
      **Revert** (the cell as it was) or **Keep it**;
    - **not checked**: as for solved; check from the Problems panel to know more.
 4. **Simplify** shortens the geometry with the laws of Boolean algebra, in the background

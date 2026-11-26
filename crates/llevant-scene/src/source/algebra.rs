@@ -555,6 +555,16 @@ pub fn expand_cut(
             warnings: Vec::new(),
         }
     };
+    let plain_form = |why: String| {
+        let mut e = join(a, &Expr::Complement(b));
+        e.plain = true;
+        e.warnings.push(format!("#{b} is written as it is: {why}"));
+        e
+    };
+    // Stopped already: nothing is expanded (no cell looked up).
+    if limits.over() {
+        return Ok(plain_form("stopped before it was expanded".into()));
+    }
     let mut nodes = 0;
     let both = Expr::And(vec![a.clone(), Expr::Complement(b)]);
     let mut reference = to_bool(&both, Some(cells), &mut Vec::new(), &mut nodes);
@@ -564,14 +574,8 @@ pub fn expand_cut(
         nodes = 0;
         reference = to_bool_with(&both, Some(cells), true, &mut Vec::new(), &mut nodes);
     }
-    let plain_form = |why: String| {
-        let mut e = join(a, &Expr::Complement(b));
-        e.plain = true;
-        e.warnings.push(format!("#{b} is written as it is: {why}"));
-        e
-    };
     let reference = match reference {
-        Ok(_) if limits.over() => return Ok(plain_form("stopped before it was expanded".into())),
+        Ok(_) if limits.over() => return Ok(plain_form("stopped while it was expanded".into())),
         Ok(r) => r,
         Err(why) => return Ok(plain_form(why)),
     };
@@ -1648,9 +1652,14 @@ mod tests {
             until: None,
             cancel: Some(Arc::new(AtomicBool::new(true))),
         };
-        let cells = |n: i64| (n == 2).then(|| parse("-1"));
+        let looked_up = std::cell::Cell::new(0);
+        let cells = |n: i64| {
+            looked_up.set(looked_up.get() + 1);
+            (n == 2).then(|| parse("-1"))
+        };
         let e = expand_cut(&parse("-1 2"), 2, &cells, &limits).unwrap();
         assert!(!e.empty && e.plain, "{e:?}");
+        assert_eq!(looked_up.get(), 0, "no cell is looked up once stopped");
         assert!(e.warnings.iter().any(|w| w.contains("stopped")), "{e:?}");
         let free = expand_cut(&parse("-1 2"), 2, &cells, &Limits::default()).unwrap();
         assert!(free.empty, "{free:?}");

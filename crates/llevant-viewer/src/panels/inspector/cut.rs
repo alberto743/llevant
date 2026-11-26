@@ -394,14 +394,16 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
                 ui.visuals().error_fg_color,
                 if known {
                     format!(
-                        "New overlap: cell{s} {list} now overlap{v} cell {cut}: {they} write{v} \
-                         #{keep}, so took in what was cut"
+                        "New overlap: cell{s} {list} now overlap{v} cell {cut}: {they} depend{v} \
+                         on cell {keep} (#{keep}, directly or through other cells), so took in \
+                         what was cut"
                     )
                 } else {
                     format!(
-                        "Overlap: cell{s} {list} overlap{v} cell {cut}: {they} write{v} #{keep}, so \
-                         may have taken in what was cut (no check before the cut says whether \
-                         {they} overlapped already)"
+                        "Overlap: cell{s} {list} overlap{v} cell {cut}: {they} depend{v} on cell \
+                         {keep} (#{keep}, directly or through other cells), so may have taken in \
+                         what was cut (no check before the cut says whether {they} overlapped \
+                         already)"
                     )
                 },
             );
