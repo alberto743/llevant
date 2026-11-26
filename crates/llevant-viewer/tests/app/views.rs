@@ -935,10 +935,22 @@ fn volumes_problems_and_alike() {
     shortcut(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
     panel(&mut h, Panel::Statistics);
     h.run_steps(2);
-    let find = h.get_by_label("Find universes alike");
-    find.scroll_to_me();
-    h.run_steps(30);
-    h.get_by_label("Find universes alike").click();
+    // The panel's sections can still grow while it settles, taking the
+    // button out of view again (and out of the tree): scroll to it until it
+    // stays, then click it.
+    let mut clicked = false;
+    for _ in 0..60 {
+        if let Some(find) = h.query_by_label("Find universes alike") {
+            find.scroll_to_me();
+        }
+        h.run_steps(2);
+        if let Some(find) = h.query_by_label("Find universes alike") {
+            find.click();
+            clicked = true;
+            break;
+        }
+    }
+    assert!(clicked, "the Find universes alike button");
     step_until(&mut h, "fingerprints", |a| {
         a.document().unwrap().results.alike.is_some()
     });
