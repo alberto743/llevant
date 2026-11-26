@@ -473,6 +473,16 @@ fn reaches(tree: &migjorn::Model, from: i64, target: i64) -> Option<i64> {
     let mut todo = vec![from];
     while let Some(n) = todo.pop() {
         let Some(c) = tree.cell(n) else { continue };
+        // A `LIKE m BUT` cell has the geometry of m: it writes what m writes.
+        if let Some(m) = c.like() {
+            if m == target {
+                return Some(n);
+            }
+            if !seen.contains(&m) {
+                seen.push(m);
+                todo.push(m);
+            }
+        }
         for w in geometry_words(&c.geometry_text()) {
             let Word::Cell(m) = w.kind else { continue };
             if m == target {
@@ -622,6 +632,26 @@ mod tests {
             "t\n1 0 -1 imp:n=1\n2 0 #3 -2 imp:n=1\n3 0 -3 imp:n=1\n\n1 so 5\n2 so 9\n3 so 7\n\n",
         );
         assert!(s.cut_plan(1, 2, false).is_ok());
+        // Through a LIKE: cell 2 writes #3, cell 3 is LIKE 4, cell 4 writes #1.
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 #3 -2 imp:n=1\n3 like 4 but imp:n=2\n4 0 #1 -3 imp:n=1\n\n\
+             1 so 5\n2 so 9\n3 so 7\n\n",
+        );
+        let err = s.cut_plan(1, 2, false).unwrap_err();
+        assert!(err.contains("complement each other"), "{err}");
+    }
+
+    /// Two inputs loaded alike, each edited once: a plan made from one is
+    /// not written into the other.
+    #[test]
+    fn a_plan_is_bound_to_the_input_it_was_made_from() {
+        let a = Source::from_str(INPUT);
+        let b = Source::from_str(&INPUT.replace("2 0 -1 3", "2 0 -2 3"));
+        assert_ne!(a.revision(), b.revision());
+        let plan = a.cut_expand(1, 2, &Limits::default()).unwrap();
+        let err = b.apply_expand(&plan).unwrap_err();
+        assert!(err.contains("changed since"), "{err}");
+        assert!(a.apply_expand(&plan).is_ok());
     }
 
     #[test]

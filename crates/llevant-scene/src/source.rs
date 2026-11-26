@@ -105,8 +105,17 @@ pub struct Source {
     tree: RwLock<migjorn::Model>,
     /// The line of each card (by slot), as of the last edit.
     lines: RwLock<CardLines>,
-    /// Counts the times the tree was taken to be written ([`Source::revision`]).
+    /// Changes each time the tree is taken to be written ([`Source::revision`]).
     revision: AtomicU64,
+}
+
+/// Every revision of every [`Source`], so that no two sources, nor two
+/// states of one, share a number: a plan made from one source is never taken
+/// for one of another that happens to have been edited as many times.
+static REVISIONS: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    REVISIONS.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The line of every card, by slot: what [`migjorn::Model::line_of`] gives,
@@ -169,7 +178,7 @@ impl Source {
         Source {
             tree: RwLock::new(tree),
             lines: RwLock::new(lines),
-            revision: AtomicU64::new(0),
+            revision: AtomicU64::new(next_revision()),
         }
     }
 
@@ -182,7 +191,7 @@ impl Source {
     /// The tree to write, the revision counted.
     fn tree_mut(&self) -> RwLockWriteGuard<'_, migjorn::Model> {
         let tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
-        self.revision.fetch_add(1, Ordering::Relaxed);
+        self.revision.store(next_revision(), Ordering::Relaxed);
         tree
     }
 
@@ -193,13 +202,13 @@ impl Source {
         if self.revision.load(Ordering::Relaxed) != revision {
             return None;
         }
-        self.revision.fetch_add(1, Ordering::Relaxed);
+        self.revision.store(next_revision(), Ordering::Relaxed);
         Some(tree)
     }
 
     /// A number that changes whenever the input may have: equal revisions,
-    /// the same text (what a frontend caches something computed from the
-    /// cards by).
+    /// the same source with the same text (what a frontend caches something
+    /// computed from the cards by). No two sources share one.
     pub fn revision(&self) -> u64 {
         self.revision.load(Ordering::Relaxed)
     }

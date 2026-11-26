@@ -97,11 +97,18 @@ tests). Every plan carries the `Source::revision` it was made at: planning fails
 while it ran, and `apply_card` writes only if the revision is still that one, the check made
 under the lock that writes, so an edit of any card the plan was proven from (the cut cell's,
 a `#n` it expanded) refuses it too (`a_plan_is_refused_when_a_cell_it_was_proven_from_changed`,
-`a_stale_plan_is_refused`). A cut that would make the two cells write each other's complement,
-directly or through other cells, and a `LIKE` cut cell are refused
+`a_stale_plan_is_refused`). Revisions are drawn from one counter for the whole process, so no
+two sources share one and a plan is never written into another input
+(`a_plan_is_bound_to_the_input_it_was_made_from`). A cut that would make the two cells write each other's complement,
+directly or through other cells (a `LIKE m BUT` cell counts as writing what m writes), and a
+`LIKE` cut cell are refused
 (`a_cut_that_would_make_cells_complement_each_other_is_refused`,
 `a_like_cell_cannot_be_cut_out_of_another`). The Boolean work looks at the limits at the
-start of a proof, every 1024 steps of it and while absorbing, and gives up a product of
+start of a proof (and of a simplification: none is given once they are over), every 1024
+steps of it and while absorbing; a tier-1 product with an atom of both senses is a constant and
+absorbs nothing (`a_contradiction_absorbs_nothing`); a `#b` whose copies would be more than a
+proof can take is not expanded (`a_complement_written_too_many_times_is_not_expanded`); and it
+gives up a product of
 unions with over twice the cap of products before absorbing it (absorbing is quadratic), and keeps a product that absorbs below the cap
 (`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one` (a `#n` that cannot be
 expanded is one unknown region on both sides of a proof: equal so is equal; unequal so says
