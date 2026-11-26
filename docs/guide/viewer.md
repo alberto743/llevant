@@ -149,8 +149,9 @@ It goes in steps in the inspector, and nothing is written without a button:
    something is off. What can go wrong is a cell that writes `#A`: it takes in what was
    cut out of A, and may now overlap B. The inspector says which of these it found:
    **solved** (and the other cells A still overlaps, if any), the overlap **remains**,
-   or a **new overlap** of B with a cell that writes `#A` (new when the check before the
-   cut, if there was one, did not find it; else the inspector only says that they overlap).
+   or a **new overlap** of B with a cell that writes `#A` (new when a check before the
+   cut looked everywhere the one after did and did not find it; else the inspector only says
+   that they overlap).
    Only a check of every place where A and B met before the cut (each placement of their
    universe), started after the cut, counts: if the last check was of another region, or
    began before Apply, the inspector says the cut is **not checked**, and you check from the

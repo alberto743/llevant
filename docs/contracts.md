@@ -124,6 +124,9 @@ check that covered everywhere A and B met before the cut, in the model's frame
 (`cells_meet_where_they_are_placed`; a check covers its boxes only within its region,
 `a_check_covers_its_boxes_only_within_its_region`) and that started after
 the cut was written (`a_check_started_before_the_cut_does_not_judge_it`, `tests/app/editing.rs`).
+An overlap of B with such a cell is called new only against a check before the cut that
+covered everywhere the one after did, and did not find it
+(`an_overlap_is_new_only_against_a_check_that_looked_there`).
 
 ## Editing the input
 

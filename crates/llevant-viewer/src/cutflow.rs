@@ -44,9 +44,9 @@ pub struct CutFlow {
     /// Where the two cells meet, in the model's frame, before the cut
     /// ([`where_they_meet`]): what a check must have covered to judge it.
     pub meet: Vec<Aabb>,
-    /// The cells the last check before the cut found overlapping `cut`
-    /// (`None`: there was none): an overlap of one of them is not new.
-    pub cut_overlapped_by: Option<Vec<i64>>,
+    /// The last check before the cut, as far as it bears on `cut`
+    /// (`None`: there was none).
+    pub before: Option<Before>,
     pub phase: Phase,
 }
 
@@ -90,7 +90,7 @@ impl CutFlow {
             key: key(source),
             plan_cancel,
             meet: Vec::new(),
-            cut_overlapped_by: None,
+            before: None,
             phase: Phase::Planning(slot),
         }
     }
@@ -185,9 +185,28 @@ pub fn where_they_meet(m: &Model, keep: i64, cut: i64) -> Vec<Aabb> {
         .collect()
 }
 
+/// What the last check before a cut said of the cut cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Before {
+    /// The cells it found overlapping the cut cell.
+    pub overlapping: Vec<i64>,
+    /// Where it looked ([`crate::jobs::CheckRun::covered`]): it says
+    /// nothing of an overlap elsewhere.
+    pub covered: Vec<Aabb>,
+}
+
+/// What the last check of `doc` said of `cell` (`None`: no check has run).
+pub fn before(doc: &crate::document::Document, cell: i64) -> Option<Before> {
+    let covered = doc.results.check.as_ref()?.covered.clone();
+    Some(Before {
+        overlapping: overlapping(doc, cell)?,
+        covered,
+    })
+}
+
 /// The cells the last check of `doc` found overlapping `cell` (`None`:
 /// no check has run).
-pub fn overlapping(doc: &crate::document::Document, cell: i64) -> Option<Vec<i64>> {
+fn overlapping(doc: &crate::document::Document, cell: i64) -> Option<Vec<i64>> {
     let run = doc.results.check.as_ref()?;
     let m = &doc.model;
     let c = m.cell_index(cell)?;

@@ -226,21 +226,37 @@ fn verdict(doc: &Document, f: &CutFlow, plan: &CutExpand, check_before: u64) -> 
         .map(|&i| v.labels[i].involved.as_slice())
         .collect();
     let users: Vec<u32> = plan.users.iter().filter_map(|&n| m.cell_index(n)).collect();
-    let mut j = judge(&groups, a, b, &users, |c| m.cell_id(c));
-    // An overlap with B found before the cut too is not the cut's doing.
-    if let Some(before) = &f.cut_overlapped_by {
-        j.new.retain(|c| !before.contains(c));
-    }
+    let j = judge(&groups, a, b, &users, |c| m.cell_id(c));
+    let (new, known) = attribute(j.new, f.before.as_ref(), &run.covered);
     if j.remains {
         Verdict::Remains(j.others)
-    } else if !j.new.is_empty() {
+    } else if !new.is_empty() {
         Verdict::New {
-            cells: j.new,
+            cells: new,
             others: j.others,
-            known: f.cut_overlapped_by.is_some(),
+            known,
         }
     } else {
         Verdict::Solved(j.others)
+    }
+}
+
+/// Which of the cells found overlapping B after the cut (`new`) the cut is
+/// known to have made overlap, and whether that is known: only when the
+/// check before the cut looked everywhere the one after did (else an
+/// overlap it did not find may be one it did not look for). Those it found
+/// overlapping B already are then dropped.
+fn attribute(
+    mut new: Vec<i64>,
+    before: Option<&cutflow::Before>,
+    after: &[llevant::Aabb],
+) -> (Vec<i64>, bool) {
+    match before {
+        Some(b) if after.iter().all(|x| crate::jobs::covered_by(&b.covered, x)) => {
+            new.retain(|c| !b.overlapping.contains(c));
+            (new, true)
+        }
+        _ => (new, false),
     }
 }
 
@@ -527,6 +543,35 @@ mod tests {
         h.get_by_label("Revert").click();
         h.run();
         assert!(matches!(h.state().as_slice(), [Command::RevertCut]));
+    }
+
+    /// A check before the cut is a baseline only where it looked: one of a
+    /// part of what the check after covered cannot show an overlap is new.
+    #[test]
+    fn an_overlap_is_new_only_against_a_check_that_looked_there() {
+        let b = |lo: f64, hi: f64| llevant::Aabb {
+            lo: [lo; 3],
+            hi: [hi; 3],
+        };
+        let partial = cutflow::Before {
+            overlapping: vec![],
+            covered: vec![b(1.0, 2.0)],
+        };
+        let whole = cutflow::Before {
+            overlapping: vec![7],
+            covered: vec![b(0.0, 10.0)],
+        };
+        let after = [b(0.0, 10.0)];
+        // A partial baseline: not known, nothing dropped.
+        assert_eq!(
+            attribute(vec![5, 7], Some(&partial), &after),
+            (vec![5, 7], false)
+        );
+        // No baseline: the same.
+        assert_eq!(attribute(vec![5], None, &after), (vec![5], false));
+        // A baseline that looked everywhere: 7 overlapped B already.
+        assert_eq!(attribute(vec![5, 7], Some(&whole), &after), (vec![5], true));
+        assert_eq!(attribute(vec![7], Some(&whole), &after), (vec![], true));
     }
 
     /// Without a check before the cut, an overlap of a cell that writes
