@@ -161,7 +161,7 @@ const MEET_PAIRS_MOST: usize = 200_000;
 /// Where cells `keep` and `cut` of `m` can meet, in the model's frame: each
 /// instance box of one (as [`Model::instance_boxes`] gives it, as the check
 /// of what changed covers it) cut by each of the other's that it meets.
-/// Past [`MEET_PAIRS_MOST`] pairs, the instance boxes of `keep` that meet
+/// Past `MEET_PAIRS_MOST` pairs, the instance boxes of `keep` that meet
 /// any of `cut`'s.
 pub fn where_they_meet(m: &Model, keep: i64, cut: i64) -> Vec<Aabb> {
     let (Some(a), Some(b)) = (m.cell_index(keep), m.cell_index(cut)) else {

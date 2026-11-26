@@ -125,6 +125,21 @@ impl Source {
             .ok_or_else(|| format!("cell {keep} is not in the input (in a READ file?)"))?
             .text;
         let tree = self.tree();
+        // `U` or `TRCL` on a data card: the checks above read the cell cards
+        // alone (as llevant does), and would miss a universe or a move.
+        if let Some(name) = tree
+            .cell_parameter_cards()
+            .filter_map(|c| c.name())
+            .find(|n| {
+                let n = n.trim_start_matches('*');
+                n.eq_ignore_ascii_case("u") || n.eq_ignore_ascii_case("trcl")
+            })
+        {
+            return Err(format!(
+                "the input gives cell parameters on a `{name}` data card, which is not read: \
+                 cut by hand"
+            ));
+        }
         let a = tree
             .cell(keep)
             .ok_or_else(|| format!("no cell {keep} in the input"))?
@@ -150,6 +165,19 @@ impl Source {
             if complements && !users.contains(&n) {
                 users.push(n);
             }
+        }
+        // A `LIKE m BUT` copy of a cell that writes `#keep` writes it too.
+        loop {
+            let copies: Vec<i64> = tree
+                .cells()
+                .filter_map(|c| Some((c.id()?, c.like()?)))
+                .filter(|&(n, m)| n != keep && users.contains(&m) && !users.contains(&n))
+                .map(|(n, _)| n)
+                .collect();
+            if copies.is_empty() {
+                break;
+            }
+            users.extend(copies);
         }
         if let Some(via) = reaches(&tree, cut, keep) {
             return Err(format!(
@@ -740,6 +768,36 @@ mod tests {
         let err = s.cut_plan(1, 2, true).unwrap_err();
         assert!(err.contains("cell 3 is LIKE 1"), "{err}");
         assert!(s.cut_plan(2, 1, true).is_ok());
+    }
+
+    /// A `LIKE m BUT` copy of a cell that writes `#keep` writes it too: it
+    /// is one of the cells named, and one the viewer's verdict looks at.
+    #[test]
+    fn a_like_copy_of_a_cell_writing_the_complement_is_named() {
+        let s = Source::from_str(
+            "t\n1 0 -1 imp:n=1\n2 0 -2 imp:n=1\n3 0 #1 -3 imp:n=1\n5 like 3 but imp:n=2\n\
+             6 like 5 but imp:n=1\n4 0 3 imp:n=0\n\n1 so 5\n2 sx 4 5\n3 so 50\n\n",
+        );
+        let e = s.cut_expand(1, 2, &Limits::default()).unwrap();
+        let mut users = e.users.clone();
+        users.sort_unstable();
+        assert_eq!(users, [3, 5, 6]);
+    }
+
+    /// `U` (or `TRCL`) on a data card is not read: a cut, whose checks read
+    /// the cell cards, is refused rather than made across universes.
+    #[test]
+    fn a_cut_is_refused_when_cells_are_placed_by_a_data_card() {
+        let deck = "t\n1 0 -1\n2 0 -2\n3 0 1 2 -3\n4 0 3\n\n1 so 5\n2 sx 4 5\n3 so 50\n\n\
+                    imp:n 1 1 1 0\n";
+        assert!(
+            Source::from_str(deck).cut_plan(1, 2, false).is_ok(),
+            "IMP is fine"
+        );
+        let err = Source::from_str(&format!("{deck}u 1 0 0 0\n"))
+            .cut_plan(1, 2, false)
+            .unwrap_err();
+        assert!(err.contains("data card"), "{err}");
     }
 
     #[test]

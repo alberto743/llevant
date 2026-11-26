@@ -597,8 +597,10 @@ class Deck:
         universes, a `LIKE` cell (`keep` or `cut`), a `keep` with a `TRCL`, a
         `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already and
         a `cut` that writes `#keep`, directly or through other cells (the two
-        would complement each other). `Cut.warnings` names the cells that
-        write `#keep` (they take in what is cut) and a label of `keep` that
+        would complement each other), and any cut of an input that gives `U`
+        or `TRCL` on a data card (not read). `Cut.warnings` names the cells
+        that write `#keep`, `LIKE` copies of them included (they take in what
+        is cut) and a label of `keep` that
         no longer fits on its card.
         """
     def apply(self, cut: Cut) -> None:

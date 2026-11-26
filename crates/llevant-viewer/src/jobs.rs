@@ -179,10 +179,10 @@ fn covered_of(region: Aabb, within: Option<&[Aabb]>) -> Vec<Aabb> {
 
 /// Whether one of `boxes` holds all of `b`, up to rounding.
 fn covered_by(boxes: &[Aabb], b: &Aabb) -> bool {
-    let tol = 1e-9;
     boxes.iter().any(|c| {
         (0..3).all(|i| {
-            let slack = tol * (1.0 + c.lo[i].abs().max(c.hi[i].abs()));
+            // Rounding: a nanometre, or a few ulps of the coordinate.
+            let slack = 1e-7 + 1e-14 * c.lo[i].abs().max(c.hi[i].abs());
             c.lo[i] - slack <= b.lo[i] && b.hi[i] <= c.hi[i] + slack
         })
     })

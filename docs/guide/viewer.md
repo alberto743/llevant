@@ -171,7 +171,8 @@ It goes in steps in the inspector, and nothing is written without a button:
 Each edit is one Undo and is not saved until you save the input. An A with a `TRCL` (the
 cell that is edited), a `LIKE` cell (as A or as B), a cell that a `LIKE` cell copies and cells
 in different universes are refused, as is a B that writes `#A` (directly or through other
-cells, a `LIKE` cell included: the two would complement each other). A B with a `TRCL`, or
+cells, a `LIKE` cell included: the two would complement each other), and every cut of an
+input that gives `U` or `TRCL` on a data card (llevant reads them from cell cards only). A B with a `TRCL`, or
 another `#n` in A that cannot be written out, is written as `#n` as it is. A cut out of a
 cell cut by `#B` already is refused, and so is one that the algebra proves would leave
 nothing of A (A inside B written so that the laws of Boolean algebra show it; an A inside B

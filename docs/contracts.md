@@ -100,7 +100,10 @@ a `#n` it expanded) refuses it too (`a_plan_is_refused_when_a_cell_it_was_proven
 `a_stale_plan_is_refused`). Revisions are drawn from one counter for the whole process, so no
 two sources share one and a plan is never written into another input
 (`a_plan_is_bound_to_the_input_it_was_made_from`). A cut that would make the two cells write each other's complement,
-directly or through other cells (a `LIKE m BUT` cell counts as writing what m writes), and a
+directly or through other cells (a `LIKE m BUT` cell counts as writing what m writes, also
+among the cells named as writing `#A`, `a_like_copy_of_a_cell_writing_the_complement_is_named`),
+any cut of an input that gives `U` or `TRCL` on a data card, which is not read
+(`a_cut_is_refused_when_cells_are_placed_by_a_data_card`), and a
 `LIKE` cut cell are refused
 (`a_cut_that_would_make_cells_complement_each_other_is_refused`,
 `a_like_cell_cannot_be_cut_out_of_another`). The Boolean work looks at the limits at the
