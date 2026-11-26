@@ -186,7 +186,13 @@ enum Verdict {
     Remains(Vec<i64>),
     /// Cells that write `#A` took in what was cut, and now overlap B (and
     /// other cells overlapping A).
-    New { cells: Vec<i64>, others: Vec<i64> },
+    New {
+        cells: Vec<i64>,
+        others: Vec<i64>,
+        /// A check before the cut did not find them overlapping B (else it
+        /// is not known whether they did).
+        known: bool,
+    },
 }
 
 fn verdict(doc: &Document, f: &CutFlow, plan: &CutExpand, check_before: u64) -> Verdict {
@@ -206,15 +212,10 @@ fn verdict(doc: &Document, f: &CutFlow, plan: &CutExpand, check_before: u64) -> 
     let (Some(a), Some(b)) = (m.cell_index(f.keep), m.cell_index(f.cut)) else {
         return Verdict::NotChecked;
     };
-    // A check that did not look where the two cells can overlap says nothing
-    // of the cut (one of a region elsewhere, started from the panels).
-    let problem = m.bounds(llevant::Scope::Problem);
-    let together = m
-        .cell(a)
-        .bbox
-        .intersect(&m.cell(b).bbox)
-        .intersect(&problem);
-    if !together.is_empty() && !run.covers(&together) {
+    // A check that did not look everywhere the two cells met before the cut
+    // (in the model's frame, every placement) says nothing of it: one of a
+    // region elsewhere, started from the panels.
+    if f.meet.is_empty() || !f.meet.iter().all(|x| run.covers(x)) {
         return Verdict::NotChecked;
     }
     let v = &run.volumes;
@@ -225,13 +226,18 @@ fn verdict(doc: &Document, f: &CutFlow, plan: &CutExpand, check_before: u64) -> 
         .map(|&i| v.labels[i].involved.as_slice())
         .collect();
     let users: Vec<u32> = plan.users.iter().filter_map(|&n| m.cell_index(n)).collect();
-    let j = judge(&groups, a, b, &users, |c| m.cell_id(c));
+    let mut j = judge(&groups, a, b, &users, |c| m.cell_id(c));
+    // An overlap with B found before the cut too is not the cut's doing.
+    if let Some(before) = &f.cut_overlapped_by {
+        j.new.retain(|c| !before.contains(c));
+    }
     if j.remains {
         Verdict::Remains(j.others)
     } else if !j.new.is_empty() {
         Verdict::New {
             cells: j.new,
             others: j.others,
+            known: f.cut_overlapped_by.is_some(),
         }
     } else {
         Verdict::Solved(j.others)
@@ -369,16 +375,28 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
                 close_button(ui, "Keep it", out);
             });
         }
-        Verdict::New { cells, others } => {
+        Verdict::New {
+            cells,
+            others,
+            known,
+        } => {
+            let (s, v) = if cells.len() == 1 { ("", "s") } else { ("s", "") };
+            let list = cells_list(&cells);
             ui.colored_label(
                 ui.visuals().error_fg_color,
-                format!(
-                    "New overlap: cell{s} {list} now overlap{v} cell {cut} (they write #{keep}, \
-                     so they took in what was cut out of cell {keep})",
-                    s = if cells.len() == 1 { "" } else { "s" },
-                    v = if cells.len() == 1 { "s" } else { "" },
-                    list = cells_list(&cells),
-                ),
+                if known {
+                    format!(
+                        "New overlap: cell{s} {list} now overlap{v} cell {cut}, which the check \
+                         before the cut did not find (they write #{keep}, so they took in what \
+                         was cut out of cell {keep})"
+                    )
+                } else {
+                    format!(
+                        "Overlap: cell{s} {list} overlap{v} cell {cut} (they write #{keep}, so \
+                         they may have taken in what was cut out of cell {keep}; no check before \
+                         the cut says whether they overlapped already)"
+                    )
+                },
             );
             if !others.is_empty() {
                 ui.label(
@@ -496,6 +514,7 @@ mod tests {
         let mut h = shown(Verdict::New {
             cells: vec![5],
             others: vec![],
+            known: true,
         });
         h.run();
         h.get_by_label_contains("New overlap: cell 5 now overlaps cell 3");
@@ -504,6 +523,20 @@ mod tests {
         h.get_by_label("Revert").click();
         h.run();
         assert!(matches!(h.state().as_slice(), [Command::RevertCut]));
+    }
+
+    /// Without a check before the cut, an overlap of a cell that writes
+    /// `#A` with B is not said to be the cut's doing.
+    #[test]
+    fn an_overlap_not_known_to_be_new_is_not_called_new() {
+        let mut h = shown(Verdict::New {
+            cells: vec![5],
+            others: vec![],
+            known: false,
+        });
+        h.run();
+        h.get_by_label_contains("Overlap: cell 5 overlaps cell 3");
+        assert!(h.query_by_label_contains("New overlap").is_none());
     }
 
     fn shown(verdict: Verdict) -> egui_kittest::Harness<'static, Vec<Command>> {

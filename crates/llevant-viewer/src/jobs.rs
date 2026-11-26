@@ -164,6 +164,19 @@ impl CheckRun {
     }
 }
 
+/// Where a check of `region` (limited to `within`) traces: the boxes cut to
+/// the region, as `volumes_within` cuts them, else the region.
+fn covered_of(region: Aabb, within: Option<&[Aabb]>) -> Vec<Aabb> {
+    match within {
+        Some(b) => b
+            .iter()
+            .map(|b| b.intersect(&region))
+            .filter(|b| !b.is_empty())
+            .collect(),
+        None => vec![region],
+    }
+}
+
 /// Whether one of `boxes` holds all of `b`, up to rounding.
 fn covered_by(boxes: &[Aabb], b: &Aabb) -> bool {
     let tol = 1e-9;
@@ -448,10 +461,7 @@ impl Job {
         let task = Task::run("check", wake, move |p| {
             let start = Instant::now();
             let grid = VolumeGrid::new(region, h);
-            let covered = match &within {
-                Some(b) => b.to_vec(),
-                None => vec![region],
-            };
+            let covered = covered_of(region, within.as_deref().map(Vec::as_slice));
             let volumes = match &within {
                 Some(b) => m.volumes_within(&grid, b, Some(p)),
                 None => m.volumes(&grid, Some(p)),
@@ -676,5 +686,20 @@ mod coverage_tests {
             "half in each is in neither"
         );
         assert!(!covered_by(&boxes, &b(40.0, 50.0)));
+    }
+
+    /// A box that reaches out of the region is covered only inside it: the
+    /// check traces nothing outside.
+    #[test]
+    fn a_check_covers_its_boxes_only_within_its_region() {
+        let b = |lo: f64, hi: f64| Aabb {
+            lo: [lo; 3],
+            hi: [hi; 3],
+        };
+        let covered = covered_of(b(0.0, 10.0), Some(&[b(5.0, 20.0), b(30.0, 40.0)]));
+        assert_eq!(covered.len(), 1, "the box outside is dropped");
+        assert!(covered_by(&covered, &b(6.0, 9.0)));
+        assert!(!covered_by(&covered, &b(6.0, 15.0)), "past the region");
+        assert_eq!(covered_of(b(0.0, 1.0), None), vec![b(0.0, 1.0)]);
     }
 }

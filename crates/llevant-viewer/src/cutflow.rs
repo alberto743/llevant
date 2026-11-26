@@ -18,6 +18,7 @@
 //!    a diff.
 //! 5. Accepted or discarded (or the whole cut reverted): the flow closes.
 
+use llevant::{Aabb, Model, Scope};
 use llevant_scene::source::{CutExpand, Limits, Simplified, Source};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,6 +41,12 @@ pub struct CutFlow {
     key: (usize, u64),
     /// Stops the planning when the flow is closed or replaced.
     plan_cancel: Arc<AtomicBool>,
+    /// Where the two cells meet, in the model's frame, before the cut
+    /// ([`where_they_meet`]): what a check must have covered to judge it.
+    pub meet: Vec<Aabb>,
+    /// The cells the last check before the cut found overlapping `cut`
+    /// (`None`: there was none): an overlap of one of them is not new.
+    pub cut_overlapped_by: Option<Vec<i64>>,
     pub phase: Phase,
 }
 
@@ -82,6 +89,8 @@ impl CutFlow {
             cut,
             key: key(source),
             plan_cancel,
+            meet: Vec::new(),
+            cut_overlapped_by: None,
             phase: Phase::Planning(slot),
         }
     }
@@ -146,6 +155,56 @@ impl CutFlow {
     }
 }
 
+/// The most pairs of boxes [`where_they_meet`] intersects one by one.
+const MEET_PAIRS_MOST: usize = 200_000;
+
+/// Where cells `keep` and `cut` of `m` can meet, in the model's frame: each
+/// instance box of one (as [`Model::instance_boxes`] gives it, as the check
+/// of what changed covers it) cut by each of the other's that it meets.
+/// Past [`MEET_PAIRS_MOST`] pairs, the instance boxes of `keep` that meet
+/// any of `cut`'s.
+pub fn where_they_meet(m: &Model, keep: i64, cut: i64) -> Vec<Aabb> {
+    let (Some(a), Some(b)) = (m.cell_index(keep), m.cell_index(cut)) else {
+        return Vec::new();
+    };
+    let problem = m.bounds(Scope::Problem);
+    let (ka, kb) = (
+        m.instance_boxes(&[a], problem, 0.0),
+        m.instance_boxes(&[b], problem, 0.0),
+    );
+    if ka.len().saturating_mul(kb.len()) > MEET_PAIRS_MOST {
+        let all_b = kb.iter().fold(Aabb::EMPTY, |u, x| u.union(x));
+        return ka
+            .into_iter()
+            .filter(|x| !x.intersect(&all_b).is_empty())
+            .collect();
+    }
+    ka.iter()
+        .flat_map(|x| kb.iter().map(move |y| x.intersect(y)))
+        .filter(|x| !x.is_empty())
+        .collect()
+}
+
+/// The cells the last check of `doc` found overlapping `cell` (`None`:
+/// no check has run).
+pub fn overlapping(doc: &crate::document::Document, cell: i64) -> Option<Vec<i64>> {
+    let run = doc.results.check.as_ref()?;
+    let m = &doc.model;
+    let c = m.cell_index(cell)?;
+    let v = &run.volumes;
+    let mut out: Vec<i64> = v
+        .problems()
+        .iter()
+        .filter(|&&i| v.labels[i].status == llevant::Status::Overlap)
+        .map(|&i| v.labels[i].involved.as_slice())
+        .filter(|inv| inv.contains(&c))
+        .flat_map(|inv| inv.iter().filter(|&&x| x != c).map(|&x| m.cell_id(x)))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    Some(out)
+}
+
 /// A flow closed or replaced stops what it still had running: its work is
 /// no longer wanted.
 impl Drop for CutFlow {
@@ -182,5 +241,24 @@ mod tests {
         assert!(!flag.load(Ordering::Relaxed));
         drop(f);
         assert!(flag.load(Ordering::Relaxed));
+    }
+
+    /// Two cells of a universe placed 100 cm along x meet there, not where
+    /// their own boxes (in the universe's frame) are.
+    #[test]
+    fn cells_meet_where_they_are_placed() {
+        let m = Model::from_text(
+            "t\n10 0 -10 fill=1 (100 0 0) imp:n=1\n11 0 10 -99 imp:n=1\n12 0 99 imp:n=0\n\
+             1 0 -1 u=1 imp:n=1\n2 0 -2 u=1 imp:n=1\n3 0 1 2 u=1 imp:n=1\n\n\
+             1 so 5\n2 sx 4 5\n10 s 100 0 0 20\n99 so 500\n\n",
+            &llevant::Options::default(),
+        );
+        let meet = where_they_meet(&m, 1, 2);
+        assert!(!meet.is_empty());
+        for b in &meet {
+            assert!(b.lo[0] > 90.0 && b.hi[0] < 110.0, "{b:?}");
+        }
+        // The cells' own boxes are near the origin.
+        assert!(m.cell(m.cell_index(1).unwrap()).bbox.hi[0] < 10.0);
     }
 }

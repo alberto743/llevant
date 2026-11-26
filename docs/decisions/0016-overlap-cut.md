@@ -93,8 +93,9 @@ Release build, 6 cores. Cell A has m groups `(a:b)`; cell B has 16 planes.
   as written, and the proof treats it as the same unknown region on both sides, so
   `-1 #3` cut by `-2` is `-1 #3 2` (`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one`).
 - A plan is bound to the input revision it was made at; any edit before Apply makes a new
-  preview necessary. The verdict counts only a check that looked where A and B can overlap
-  and that started after the cut was written (checks are numbered as they start, so one
+  preview necessary. The verdict counts only a check that looked everywhere A and B met
+  before the cut (their instance boxes intersected, in the model's frame: a cell's own box is
+  in its universe's frame) and that started after the cut was written (checks are numbered as they start, so one
   begun on the model before the cut is not taken for its check even if it ends after).
 - A cell that writes `#keep` is named before Apply, and after it if it overlaps B. It is
   never changed.

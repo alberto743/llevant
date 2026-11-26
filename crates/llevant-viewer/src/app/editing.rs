@@ -47,8 +47,15 @@ impl ViewerApp {
     ) {
         let what = format!("cell {} cut by #{}", plan.keep, plan.cut);
         let select = Query::Cells(vec![plan.keep, plan.cut]);
-        if let Some(f) = self.doc.as_mut().and_then(|d| d.cut_flow.as_mut()) {
-            f.phase = crate::cutflow::Phase::Applying(plan.clone());
+        if let Some(d) = self.doc.as_mut() {
+            // Before the cut: where the cells meet, and who overlapped B.
+            let meet = crate::cutflow::where_they_meet(&d.model, plan.keep, plan.cut);
+            let before = crate::cutflow::overlapping(d, plan.cut);
+            if let Some(f) = d.cut_flow.as_mut() {
+                f.phase = crate::cutflow::Phase::Applying(plan.clone());
+                f.meet = meet;
+                f.cut_overlapped_by = before;
+            }
         }
         let said = what.clone();
         let started = self.start_change(ctx, what, Some(select), move |source| {
