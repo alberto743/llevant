@@ -11,7 +11,7 @@
 //! from the input by the engine's own parser, and a word this reads wrongly
 //! only gets the wrong colour.
 
-use llevant_scene::source::CardKind;
+use llevant_scene::source::{lines, CardKind};
 
 /// What a piece of a card is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,17 +124,8 @@ impl State {
                 }),
             }
         };
-        // A comment line inside a card: `c` in the first five columns,
-        // then a blank (or nothing).
-        let lead = line.len() - line.trim_start().len();
-        let t = line.trim_start();
-        if lead < 5
-            && (t.eq_ignore_ascii_case("c")
-                || (t.len() > 1
-                    && t.as_bytes()[0].eq_ignore_ascii_case(&b'c')
-                    && t.as_bytes()[1] == b' '))
-            && self.words > 0
-        {
+        // A comment line inside a card.
+        if lines::is_comment(line) && self.words > 0 {
             push(&mut out, line, Kind::Comment);
             return out;
         }

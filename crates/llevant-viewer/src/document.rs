@@ -139,6 +139,8 @@ pub struct Document {
     pub focus: Option<Picked>,
     /// The surface picked with Alt+click, marked in both views.
     pub surface_pick: Option<SurfacePick>,
+    /// The overlap cut under way, shown in the inspector.
+    pub cut_flow: Option<crate::cutflow::CutFlow>,
     /// What the pointer is over.
     pub pointer: Pointer,
     /// What the tools are editing.
@@ -319,6 +321,9 @@ pub struct Results {
     pub jobs: Vec<Job>,
     pub volumes: Option<Arc<VolumeRun>>,
     pub check: Option<Arc<CheckRun>>,
+    /// How many checks have been started: each check is numbered by it
+    /// ([`CheckRun::started`]).
+    pub checks_started: u64,
     pub alike: Option<Arc<Alike>>,
 }
 
@@ -640,6 +645,7 @@ impl Document {
             history: History::default(),
             focus: None,
             surface_pick: None,
+            cut_flow: None,
             pointer: Pointer {
                 hover: None,
                 hover_key: None,
@@ -796,6 +802,7 @@ impl Document {
         new.whole = self.whole.take();
         new.input_meshes = self.input_meshes.take();
         new.input = self.input.take();
+        new.cut_flow = self.cut_flow.take();
         new.slice_in_3d = self.slice_in_3d;
         new.cut_at_slice = self.cut_at_slice;
         new.show_cuts = self.show_cuts;
@@ -1088,7 +1095,11 @@ impl Document {
                 self.results.jobs.retain(|j| j.kind != kind);
                 self.results.jobs.push(match kind {
                     JobKind::Fingerprints => Job::fingerprints(m, wake),
-                    _ => Job::check(m, region, h, scope, within, wake),
+                    _ => {
+                        self.results.checks_started += 1;
+                        let n = self.results.checks_started;
+                        Job::check(m, region, h, scope, within, n, wake)
+                    }
                 });
             }
             Command::StartVolumes(spec) => {
@@ -1212,6 +1223,12 @@ impl Document {
             | Command::OpenDialog
             | Command::Reload
             | Command::EditCard(..)
+            | Command::ProposeCut { .. }
+            | Command::CutApply(_)
+            | Command::CutSimplify
+            | Command::CutAccept(_)
+            | Command::RevertCut
+            | Command::CancelCutFlow
             | Command::EditCells(..)
             | Command::Renumber(..)
             | Command::EditSelection

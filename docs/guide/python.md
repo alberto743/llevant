@@ -39,6 +39,11 @@ m.render(colour="realistic")            # physically based; m.materials(), m.set
 m.volumes(h=2).by("material")           # [Group(number, volume, sigma, bbox...)]
 m.volumes_to(2, 1e-3, by="cell")        # every cell, refined to sigma <= 0.1 % (Group.converged, .outcome)
 m.check(h=2)                            # gaps and overlaps
+
+deck = llevant.Deck.open("model.i")     # fix an overlap of cells 3 and 4:
+cut = deck.cut(keep=3, cut=4)           # 3 := 3 ∩ #4, shortened by Boolean algebra
+print(cut)                              # the card before and after
+deck.apply(cut); deck.save("fixed.i")   # plan and apply one cut at a time
 m.diff(m.reload())                      # what changed in the file, cell by cell
 m.recompile(text)                       # a new version of the input, from text: only what changed is built
 f = m.universe(20130)                   # a filler as a model of its own (cut="none" or a box)

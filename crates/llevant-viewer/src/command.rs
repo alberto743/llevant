@@ -482,6 +482,26 @@ pub enum Command {
     /// Write a card of the input (its kind, number and new text) and
     /// compile again (what changed only), the view kept; not saved.
     EditCard(llevant_scene::source::CardKind, i64, String),
+    /// Start fixing an overlap by cutting cell `cut` out of cell `keep`
+    /// (`#cut` added to its geometry), shown in the inspector (planned in
+    /// the background); nothing is written until [`Command::CutApply`].
+    ProposeCut {
+        keep: i64,
+        cut: i64,
+    },
+    /// Write the cut proposed, `#cut` expanded to what it stands for, as one
+    /// edit (compiled as [`Command::EditCard`]), then check whether the
+    /// overlap is solved.
+    CutApply(llevant_scene::source::CutExpand),
+    /// Simplify the geometry of the cell cut, in the background (the result
+    /// is proven equal to it); shown as a diff to accept or discard.
+    CutSimplify,
+    /// Write the simplification shown, as a second edit.
+    CutAccept(llevant_scene::source::Simplified),
+    /// Take the cut back (one Undo) and close it.
+    RevertCut,
+    /// Close the cut (and stop the work under way); what is written stays.
+    CancelCutFlow,
     /// Cells changed together (their material, density, parameters), as
     /// one edit taken back by one Undo; the cells then selected.
     EditCells(Vec<i64>, Vec<llevant_scene::source::CellChange>),

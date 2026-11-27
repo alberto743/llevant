@@ -404,7 +404,10 @@ mod tests {
     #[test]
     fn the_surface_under_the_pointer() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |_| {});
+        // The frame's textures are not uploaded: dropped on purpose.
+        ctx.run_ui(Default::default(), |_| {})
+            .textures_delta
+            .clear();
         let text = "-301 302 (#4 : -303)";
         let galley = ctx.fonts_mut(|f| {
             f.layout_no_wrap(

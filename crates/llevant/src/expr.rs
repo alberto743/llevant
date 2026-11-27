@@ -144,7 +144,7 @@ impl Lower<'_> {
     fn surf(&mut self, s: SurfaceRef, neg: bool, parent: Option<bool>) -> Result<(), String> {
         let slot = self.r.surface(s.id)?;
         // The leaf is true on the negative side for `-s`, positive for `s`.
-        let want_pos = !s.negative != neg;
+        let want_pos = s.negative == neg;
         match (slot, s.facet) {
             (SurfSlot::Single(i), None) => self.leaf(i, want_pos),
             (SurfSlot::Single(_), Some(f)) => {

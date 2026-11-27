@@ -124,6 +124,31 @@ fn problem_row(
                     .on_hover_text(m.describe(l));
                 }
             });
+            // An overlap of two cells: either can be cut out of the other;
+            // the inspector shows what the cut would change.
+            if l.status == Status::Overlap && l.involved.len() == 2 {
+                let (a, b) = (m.cell_id(l.involved[0]), m.cell_id(l.involved[1]));
+                ui.horizontal_wrapped(|ui| {
+                    for (keep, cut) in [(a, b), (b, a)] {
+                        let open = doc
+                            .cut_flow
+                            .as_ref()
+                            .is_some_and(|f| f.is(keep, cut) && f.is_of(doc.source.as_ref()));
+                        let r = ui
+                            .selectable_label(open, format!("{} #{cut} from {keep}", icons::CLIP))
+                            .on_hover_text(
+                                "Propose the cut in the inspector (nothing is written until Apply)",
+                            );
+                        if r.clicked() {
+                            out.push(if open {
+                                Command::CancelCutFlow
+                            } else {
+                                Command::ProposeCut { keep, cut }
+                            });
+                        }
+                    }
+                });
+            }
         });
     go
 }

@@ -198,7 +198,7 @@ pub fn card(
                 }
                 let long = buffer
                     .lines()
-                    .filter(|l| l.chars().count() > llevant_scene::source::MAX_COLUMNS)
+                    .filter(|l| llevant_scene::source::lines::columns(l) > llevant_scene::source::MAX_COLUMNS)
                     .count();
                 if long > 0 {
                     ui.colored_label(

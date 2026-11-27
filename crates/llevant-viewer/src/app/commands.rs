@@ -99,6 +99,73 @@ impl ViewerApp {
                     }
                 }
                 Command::EditCard(kind, id, text) => self.edit_card(kind, id, text, ctx),
+                Command::ProposeCut { keep, cut } => {
+                    if let Some(d) = &mut self.doc {
+                        // Only a cut not yet written is replaced by another.
+                        let busy = d.cut_flow.as_ref().is_some_and(|f| {
+                            f.is_of(d.source.as_ref())
+                                && !matches!(f.phase, crate::cutflow::Phase::Planning(_))
+                        });
+                        if busy {
+                            d.messages.warn(
+                                "finish or revert the cut under way first (in the inspector)"
+                                    .to_string(),
+                            );
+                        } else {
+                            d.cut_flow = d
+                                .source
+                                .as_ref()
+                                .map(|s| crate::cutflow::CutFlow::start(ctx, s, keep, cut));
+                            self.frame.show(frame::Panel::Inspector);
+                        }
+                    }
+                }
+                Command::CutApply(plan) => self.cut_apply(plan, ctx),
+                Command::CutSimplify => {
+                    // As for Revert: not while an edit cannot start, and only
+                    // for the cut written in the input as it is now.
+                    if let Some(why) = self.edit_blocked() {
+                        self.refuse_edit(&format!("cannot simplify now: {why}"));
+                        continue;
+                    }
+                    if let Some(d) = &mut self.doc {
+                        if let (Some(f), Some(s)) = (&mut d.cut_flow, &d.source) {
+                            if !(f.is_of(Some(s)) && f.simplify(ctx, s)) {
+                                d.messages.warn(
+                                    "cannot simplify now: the cut is not written in the input \
+                                     as it is"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+                Command::CutAccept(s) => self.cut_accept(s, ctx),
+                Command::RevertCut => {
+                    // Only a cut written, and nothing written after it (the
+                    // flow is closed by any other edit), is taken back. Not
+                    // while an edit cannot start (a save is under way): the
+                    // cut stays open, to be reverted when it can.
+                    if let Some(why) = self.edit_blocked() {
+                        self.refuse_edit(&format!("cannot revert now: {why}"));
+                        continue;
+                    }
+                    let written = self.doc.as_mut().and_then(|d| {
+                        let f = d.cut_flow.take()?;
+                        f.stop();
+                        Some(f.is_of(d.source.as_ref()) && f.is_written())
+                    });
+                    if written == Some(true) {
+                        self.undo_input_edit(ctx);
+                    }
+                }
+                Command::CancelCutFlow => {
+                    if let Some(d) = &mut self.doc {
+                        if let Some(f) = d.cut_flow.take() {
+                            f.stop();
+                        }
+                    }
+                }
                 Command::EditCells(ids, changes) => self.edit_cells(ids, changes, ctx),
                 Command::Renumber(kind, pairs) => self.renumber(kind, pairs, ctx),
                 Command::AddCard {

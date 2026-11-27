@@ -176,14 +176,17 @@ mod tests {
             );
             cam.ortho = ortho;
             let mut vp = None;
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            // The frame's textures are not uploaded: dropped on purpose.
+            ctx.run_ui(Default::default(), |ui| {
                 let response = ui.interact(rect, egui::Id::new("v"), egui::Sense::hover());
                 vp = Some(ViewPort {
                     kind: ViewKind::ThreeD,
                     response,
                     projection: Projection::Camera(cam.clone()),
                 });
-            });
+            })
+            .textures_delta
+            .clear();
             let vp = vp.unwrap();
             for (i, j) in [(0, 0), (599, 399), (300, 17), (45, 321)] {
                 let p = cam.point(i, j, 7.0);

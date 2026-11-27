@@ -12,6 +12,7 @@
 
 mod card;
 mod cell;
+mod cut;
 mod diff;
 pub(crate) mod fields;
 mod geometry;
@@ -86,7 +87,8 @@ pub struct Inspector {
 impl Inspector {
     /// Whether there is anything to show.
     pub fn has_content(&self, doc: &Document) -> bool {
-        self.current() != Subject::Picked
+        cut::has_content(doc)
+            || self.current() != Subject::Picked
             || picked::has_content(doc)
             || doc.editing.mesh_selected.is_some()
     }
@@ -189,6 +191,7 @@ impl Inspector {
                 ui.separator();
             }
         }
+        cut::section(ui, doc, out);
         let mut go = None;
         self.forms.strip(ui, doc, &mut go);
         match self.current() {

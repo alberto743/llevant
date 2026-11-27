@@ -14,6 +14,8 @@ impl ViewerApp {
             Some("wait for the universe being opened")
         } else if self.source.is_none() || self.source_loading.is_some() {
             Some("the input's cards are being read")
+        } else if self.source.as_ref().is_some_and(|s| s.not_utf8()) {
+            Some("the input is not UTF-8: saving it would change its other bytes")
         } else if self.dragging.as_ref().is_some_and(|d| !d.committing) {
             Some("apply or cancel the surface being moved first")
         } else {
@@ -35,6 +37,61 @@ impl ViewerApp {
         self.start_change(ctx, what, None, move |source| {
             Ok(input_edits::Change::one(id, source.edit(kind, id, &text)?))
         });
+    }
+
+    /// The cut proposed written (`#cut` expanded), as one edit (one Undo);
+    /// both cells then selected. The cut stays open in the inspector, which
+    /// says whether the check of what changed found the overlap solved.
+    pub(super) fn cut_apply(
+        &mut self,
+        plan: llevant_scene::source::CutExpand,
+        ctx: &egui::Context,
+    ) {
+        let what = format!("cell {} cut by #{}", plan.keep, plan.cut);
+        let select = Query::Cells(vec![plan.keep, plan.cut]);
+        if let Some(d) = self.doc.as_mut() {
+            // Before the cut: where the cells meet, and who overlapped B.
+            let meet = crate::cutflow::where_they_meet(&d.model, plan.keep, plan.cut);
+            let before = crate::cutflow::before(d, plan.cut);
+            if let Some(f) = d.cut_flow.as_mut() {
+                f.phase = crate::cutflow::Phase::Applying(plan.clone());
+                f.meet = meet;
+                f.before = before;
+            }
+        }
+        let said = what.clone();
+        let started = self.start_change(ctx, what, Some(select), move |source| {
+            let mut change = input_edits::Change::one(plan.keep, source.apply_expand(&plan)?);
+            change.what = said;
+            Ok(change)
+        });
+        // Not started (an edit is under way, or refused): the cut is closed,
+        // and what was said is in the messages. Only the edit this started
+        // may take the cut to the next step.
+        if !started {
+            if let Some(d) = &mut self.doc {
+                d.cut_flow = None;
+            }
+        }
+    }
+
+    /// The simplification shown written, as one edit (one Undo); the cut is
+    /// closed. Not started (a save is under way): the simplification stays
+    /// shown, to be accepted when it can.
+    pub(super) fn cut_accept(&mut self, s: llevant_scene::source::Simplified, ctx: &egui::Context) {
+        let what = format!("cell {} simplified", s.keep);
+        let select = Query::Cells(vec![s.keep]);
+        let said = what.clone();
+        let started = self.start_change(ctx, what, Some(select), move |source| {
+            let mut change = input_edits::Change::one(s.keep, source.apply_simplified(&s)?);
+            change.what = said;
+            Ok(change)
+        });
+        if started {
+            if let Some(d) = &mut self.doc {
+                d.cut_flow = None;
+            }
+        }
     }
 
     /// Cells `ids` each with `changes` made, as one edit (one Undo); the
@@ -160,6 +217,8 @@ impl ViewerApp {
 
     /// Make the change `make` gives in the input and compile it against the
     /// model shown, keeping the view; `select` selected once it lands.
+    /// Whether it was started (not when an edit is under way, or the
+    /// input is not there to edit: what was refused is said in the messages).
     pub(super) fn start_change(
         &mut self,
         ctx: &egui::Context,
@@ -168,13 +227,13 @@ impl ViewerApp {
         make: impl FnOnce(&llevant_scene::source::Source) -> Result<input_edits::Change, String>
             + Send
             + 'static,
-    ) {
+    ) -> bool {
         if let Some(why) = self.edit_blocked() {
             self.refuse_edit(&format!("cannot edit now: {why}"));
-            return;
+            return false;
         }
         let (Some(_), Some(source)) = (&self.doc, self.source.clone()) else {
-            return;
+            return false;
         };
         self.select_after = select;
         self.start_edit(ctx, source, move |source| {
@@ -184,6 +243,7 @@ impl ViewerApp {
             d.messages
                 .progress(format!("editing {what}: building only what changed…"));
         }
+        true
     }
 
     /// Move surface `id` to `coeffs`, previewed live: the drag begun if

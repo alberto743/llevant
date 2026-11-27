@@ -147,7 +147,45 @@ pub struct CheckRun {
     pub volumes: Volumes,
     /// What the region is (for the panel).
     pub scope: String,
+    /// Where it looked: the boxes it was limited to, else its region.
+    pub covered: Vec<Aabb>,
+    /// Its number among the checks started (a larger one started later, on
+    /// the model as it was then).
+    pub started: u64,
     pub seconds: f64,
+}
+
+impl CheckRun {
+    /// Whether one box it looked in holds all of `b` (an overlap there is
+    /// found if it is: the check may say nothing of a place it did not
+    /// look at).
+    pub fn covers(&self, b: &Aabb) -> bool {
+        covered_by(&self.covered, b)
+    }
+}
+
+/// Where a check of `region` (limited to `within`) traces: the boxes cut to
+/// the region, as `volumes_within` cuts them, else the region.
+fn covered_of(region: Aabb, within: Option<&[Aabb]>) -> Vec<Aabb> {
+    match within {
+        Some(b) => b
+            .iter()
+            .map(|b| b.intersect(&region))
+            .filter(|b| !b.is_empty())
+            .collect(),
+        None => vec![region],
+    }
+}
+
+/// Whether one of `boxes` holds all of `b`, up to rounding.
+pub(crate) fn covered_by(boxes: &[Aabb], b: &Aabb) -> bool {
+    boxes.iter().any(|c| {
+        (0..3).all(|i| {
+            // Rounding: a nanometre, or a few ulps of the coordinate.
+            let slack = 1e-7 + 1e-14 * c.lo[i].abs().max(c.hi[i].abs());
+            c.lo[i] - slack <= b.lo[i] && b.hi[i] <= c.hi[i] + slack
+        })
+    })
 }
 
 /// Cells points can end in: not filled, or a lattice some of whose
@@ -407,19 +445,23 @@ impl Job {
     }
 
     /// Gaps and overlaps of `m` over `region` at spacing `h`; with
-    /// `within`, on the lines of that grid inside those boxes alone.
+    /// `within`, on the lines of that grid inside those boxes alone;
+    /// `started`: its number among the checks started.
+    #[allow(clippy::too_many_arguments)]
     pub fn check(
         m: Arc<Model>,
         region: Aabb,
         h: f64,
         scope: String,
         within: Option<Arc<Vec<Aabb>>>,
+        started: u64,
         wake: Option<egui::Context>,
     ) -> Job {
         let title = format!("check of {scope} (h = {})", short(h));
         let task = Task::run("check", wake, move |p| {
             let start = Instant::now();
             let grid = VolumeGrid::new(region, h);
+            let covered = covered_of(region, within.as_deref().map(Vec::as_slice));
             let volumes = match &within {
                 Some(b) => m.volumes_within(&grid, b, Some(p)),
                 None => m.volumes(&grid, Some(p)),
@@ -428,6 +470,8 @@ impl Job {
                 Ok(volumes) => Outcome::Check(CheckRun {
                     volumes,
                     scope,
+                    covered,
+                    started,
                     seconds: start.elapsed().as_secs_f64(),
                 }),
                 Err(e) => Outcome::Failed(e.to_string()),
@@ -621,5 +665,36 @@ mod tests {
         };
         let run = measure(&m, &spec, &Progress::new(), |_| panic!("partial")).unwrap();
         assert!(run.instances.is_empty());
+    }
+
+    #[test]
+    fn a_check_covers_what_one_of_its_boxes_holds() {
+        let b = |lo: f64, hi: f64| Aabb {
+            lo: [lo; 3],
+            hi: [hi; 3],
+        };
+        let boxes = [b(0.0, 10.0), b(20.0, 30.0)];
+        assert!(covered_by(&boxes, &b(1.0, 9.0)));
+        assert!(covered_by(&boxes, &b(20.0, 30.0)));
+        assert!(
+            !covered_by(&boxes, &b(5.0, 25.0)),
+            "half in each is in neither"
+        );
+        assert!(!covered_by(&boxes, &b(40.0, 50.0)));
+    }
+
+    /// A box that reaches out of the region is covered only inside it: the
+    /// check traces nothing outside.
+    #[test]
+    fn a_check_covers_its_boxes_only_within_its_region() {
+        let b = |lo: f64, hi: f64| Aabb {
+            lo: [lo; 3],
+            hi: [hi; 3],
+        };
+        let covered = covered_of(b(0.0, 10.0), Some(&[b(5.0, 20.0), b(30.0, 40.0)]));
+        assert_eq!(covered.len(), 1, "the box outside is dropped");
+        assert!(covered_by(&covered, &b(6.0, 9.0)));
+        assert!(!covered_by(&covered, &b(6.0, 15.0)), "past the region");
+        assert_eq!(covered_of(b(0.0, 1.0), None), vec![b(0.0, 1.0)]);
     }
 }

@@ -12,12 +12,18 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::{RwLock, RwLockReadGuard};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use llevant::{Error, Result};
 
+mod algebra;
+mod cut;
 mod fields;
+pub mod lines;
 mod many;
+pub use algebra::{Cut, Limits};
+pub use cut::{nothing_left, CutExpand, CutPlan, Simplified};
 pub use fields::{
     coefficient_names, general_forms, geometry_words, wrap_long_lines, CellChange, CellFields,
     Entry, Flag, MaterialFields, Param, Spanned, Word,
@@ -100,6 +106,19 @@ pub struct Source {
     tree: RwLock<migjorn::Model>,
     /// The line of each card (by slot), as of the last edit.
     lines: RwLock<CardLines>,
+    /// Changes each time the tree is taken to be written ([`Source::revision`]).
+    revision: AtomicU64,
+    /// The file read was not UTF-8 ([`Source::not_utf8`]).
+    not_utf8: bool,
+}
+
+/// Every revision of every [`Source`], so that no two sources, nor two
+/// states of one, share a number: a plan made from one source is never taken
+/// for one of another that happens to have been edited as many times.
+static REVISIONS: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    REVISIONS.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The line of every card, by slot: what [`migjorn::Model::line_of`] gives,
@@ -147,7 +166,21 @@ impl Source {
             path: path.to_path_buf(),
             source,
         })?;
-        Ok(Source::from_str(&String::from_utf8_lossy(&bytes)))
+        Ok(match String::from_utf8(bytes) {
+            Ok(text) => Source::from_str(&text),
+            Err(e) => {
+                let mut s = Source::from_str(&String::from_utf8_lossy(e.as_bytes()));
+                s.not_utf8 = true;
+                s
+            }
+        })
+    }
+
+    /// Whether the file read was not UTF-8 (a Latin-1 `é`, say): its text
+    /// has U+FFFD where those bytes were, so writing it would change them.
+    /// The viewer does not edit such an input, and `Deck.save` refuses it.
+    pub fn not_utf8(&self) -> bool {
+        self.not_utf8
     }
 
     /// The cards of input text.
@@ -162,6 +195,8 @@ impl Source {
         Source {
             tree: RwLock::new(tree),
             lines: RwLock::new(lines),
+            revision: AtomicU64::new(next_revision()),
+            not_utf8: false,
         }
     }
 
@@ -169,6 +204,31 @@ impl Source {
     /// edits waiting while it is held.
     pub fn tree(&self) -> RwLockReadGuard<'_, migjorn::Model> {
         self.tree.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The tree to write, the revision counted.
+    fn tree_mut(&self) -> RwLockWriteGuard<'_, migjorn::Model> {
+        let tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        self.revision.store(next_revision(), Ordering::Relaxed);
+        tree
+    }
+
+    /// The tree to write if the revision is still `revision` (the lock held
+    /// from the check to the write), else `None`.
+    fn tree_mut_at(&self, revision: u64) -> Option<RwLockWriteGuard<'_, migjorn::Model>> {
+        let tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        if self.revision.load(Ordering::Relaxed) != revision {
+            return None;
+        }
+        self.revision.store(next_revision(), Ordering::Relaxed);
+        Some(tree)
+    }
+
+    /// A number that changes whenever the input may have: equal revisions,
+    /// the same source with the same text (what a frontend caches something
+    /// computed from the cards by). No two sources share one.
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Relaxed)
     }
 
     pub fn cell(&self, id: i64) -> Option<Card> {
@@ -237,19 +297,37 @@ impl Source {
     /// file is not in the input), when `text` does not read as a card of
     /// that kind, or when a line is over [`MAX_COLUMNS`].
     pub fn edit(&self, kind: CardKind, id: i64, text: &str) -> std::result::Result<Edited, String> {
+        self.edit_at(kind, id, text, None)
+    }
+
+    /// [`Source::edit`], written only if the input is still as it was at
+    /// `revision` ([`Source::revision`]), the check made under the lock that
+    /// writes: an error, changing nothing, if it has changed.
+    pub(crate) fn edit_at(
+        &self,
+        kind: CardKind,
+        id: i64,
+        text: &str,
+        revision: Option<u64>,
+    ) -> std::result::Result<Edited, String> {
         let what = format!("{} {id}", kind.name());
         if let Some((n, line)) = text
             .lines()
             .enumerate()
-            .find(|(_, l)| l.chars().count() > MAX_COLUMNS)
+            .find(|(_, l)| lines::columns(l) > MAX_COLUMNS)
         {
             return Err(format!(
                 "{what}: line {} has {} columns, over MCNP's {MAX_COLUMNS}",
                 n + 1,
-                line.chars().count()
+                lines::columns(line)
             ));
         }
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = match revision {
+            None => self.tree_mut(),
+            Some(r) => self.tree_mut_at(r).ok_or_else(|| {
+                format!("{what}: the input has changed since this was planned: plan it again")
+            })?,
+        };
         let (slot, old) = find(&tree, kind, id)
             .ok_or_else(|| format!("{what} is not in the input (in a READ file?)"))?;
         let mut text = text.to_string();
@@ -302,7 +380,7 @@ impl Source {
 
     /// Take an edit back: its card written as it was.
     pub fn restore(&self, e: &Edited) -> std::result::Result<(), String> {
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         set_text(&mut tree, e.kind, e.slot, &e.old)
             .map_err(|err| format!("{} (slot {}): {err}", e.kind.name(), e.slot))?;
         drop(tree);
@@ -312,7 +390,7 @@ impl Source {
 
     /// Make an edit taken back again: its card written as it was after it.
     pub fn redo(&self, e: &Edited) -> std::result::Result<(), String> {
-        let mut tree = self.tree.write().unwrap_or_else(|e| e.into_inner());
+        let mut tree = self.tree_mut();
         set_text(&mut tree, e.kind, e.slot, &e.new)
             .map_err(|err| format!("{} (slot {}): {err}", e.kind.name(), e.slot))?;
         drop(tree);
@@ -341,6 +419,69 @@ impl Source {
     pub fn write_source(&self, w: &mut impl io::Write) -> io::Result<()> {
         self.tree().write_source(w)
     }
+
+    /// Write the input as it is now to the file `path`, whole or not at
+    /// all: see [`replace_file`].
+    pub fn save_to(&self, path: &Path) -> io::Result<()> {
+        replace_file(path, |w| self.write_source(w))
+    }
+}
+
+/// Write the file `path` with `write`, through a new file beside it, synced,
+/// then renamed over it: whole or not at all (a failure leaves `path` as it
+/// was, and removes the new file). Through a link, the file it points to is
+/// replaced; the new file takes the permissions of the one it replaces.
+pub fn replace_file(
+    path: &Path,
+    write: impl FnOnce(&mut io::BufWriter<std::fs::File>) -> io::Result<()>,
+) -> io::Result<()> {
+    use std::io::Write;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a file name"))?;
+    let dir = target
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let (tmp, file) = (0..1000)
+        .find_map(|k| {
+            let tmp = dir.join(format!(
+                ".{}.{}-{k}.tmp",
+                name.to_string_lossy(),
+                std::process::id()
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
+                r => Some(r.map(|f| (tmp, f))),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "no free name for the temporary file",
+            ))
+        })?;
+    let written = (|| {
+        let mut w = io::BufWriter::with_capacity(1 << 20, file);
+        write(&mut w)?;
+        w.flush()?;
+        let file = w.into_inner().map_err(|e| e.into_error())?;
+        if let Ok(m) = std::fs::metadata(&target) {
+            file.set_permissions(m.permissions())?;
+        }
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// The slot and text of the card of `kind` and number `id`.
@@ -407,6 +548,80 @@ fn set_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file that is not UTF-8 is read (its other bytes as U+FFFD) and
+    /// marked, so that nothing writes it; one that is, is not.
+    #[test]
+    fn a_file_not_utf8_is_marked() {
+        // A directory of its own, made here (not one that was already there:
+        // `create` fails then), private to this user.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("llevant-utf8-{}-{nanos}", std::process::id()));
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(&dir).unwrap();
+        let latin = dir.join("latin1.i");
+        std::fs::write(
+            &latin,
+            b"caf\xe9\n1 0 -1 imp:n=1\n2 0 1 imp:n=0\n\n1 so 5\n\n",
+        )
+        .unwrap();
+        let s = Source::load(&latin).unwrap();
+        assert!(s.not_utf8());
+        assert!(s.cell(1).is_some());
+        let utf8 = dir.join("utf8.i");
+        std::fs::write(
+            &utf8,
+            "caf\u{e9}\n1 0 -1 imp:n=1\n2 0 1 imp:n=0\n\n1 so 5\n\n",
+        )
+        .unwrap();
+        assert!(!Source::load(&utf8).unwrap().not_utf8());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A save replaces the file whole, keeping its permissions and leaving
+    /// nothing beside it; one that fails leaves the file as it was.
+    #[test]
+    fn a_save_replaces_the_file_whole_or_not_at_all() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("llevant-save-{}-{nanos}", std::process::id()));
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(&dir).unwrap();
+        let path = dir.join("deck.i");
+        let old = "t\n1 0 -1 imp:n=1\n2 0 1 imp:n=0\n\n1 so 5\n\n";
+        std::fs::write(&path, old).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        let failed = replace_file(&path, |w| {
+            io::Write::write_all(w, b"half")?;
+            Err(io::Error::other("stopped"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
+        let s = Source::from_str(&old.replace("so 5", "so 6"));
+        s.save_to(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), s.to_source());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o640);
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn surface_coefficients_written_in_place() {

@@ -628,3 +628,138 @@ def test_no_static_tls():
     # built with local-dynamic TLS (docs/decisions/0009-mimalloc.md).
     DF_STATIC_TLS = 0x10
     assert not _elf_dynamic_flags(llevant._llevant.__file__) & DF_STATIC_TLS
+
+
+OVERLAPPING = """overlap
+1 0 -1 imp:n=1 $ ball
+2 0 -2 imp:n=1
+3 0 1 2 -3 imp:n=0
+4 0 3 imp:n=0
+
+1 so 5
+2 sx 4 5
+3 so 50
+
+"""
+
+
+def overlaps(text):
+    m = llevant.from_text(text)
+    return [g for g in m.volumes(h=1.0).problems() if g.status == "overlap"]
+
+
+def test_deck_cut_fixes_an_overlap():
+    assert overlaps(OVERLAPPING)
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    cut = deck.cut(2, 1)
+    assert cut.keep == 2 and cut.cut == 1
+    assert "#1" in cut.new_card
+    assert cut.terms_after <= cut.terms_before
+    assert not cut.empty
+    deck.apply(cut)
+    assert not overlaps(deck.text())
+    assert "$ ball" in deck.text()  # nothing else changed
+    assert deck.undo()
+    assert deck.text() == OVERLAPPING
+    assert not deck.undo()
+
+
+def test_deck_cut_is_simplified_by_boolean_algebra():
+    deck = llevant.Deck.from_text(
+        "t\n1 0 (-1:-2) 3 imp:n=1\n2 0 -1 3 imp:n=1\n\n1 so 5\n2 so 9\n3 px 0\n\n"
+    )
+    plain = deck.cut(1, 2, simplify=False)
+    cut = deck.cut(1, 2)
+    assert plain.geometry == "(-1:-2) 3 #2" and not plain.simplified
+    # The same three terms, in whatever order the algebra writes them.
+    assert sorted(cut.geometry.split()) == ["-2", "1", "3"] and cut.simplified
+    assert cut.trace
+
+
+def test_deck_cut_refuses_what_it_cannot_do(tmp_path):
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    with pytest.raises(ValueError, match="no cell 9"):
+        deck.cut(1, 9)
+    inside = llevant.Deck.from_text("t\n1 0 -1 imp:n=1\n2 0 -1 2 imp:n=1\n\n1 so 5\n2 px 0\n\n")
+    empty = inside.cut(2, 1)
+    assert empty.empty
+    with pytest.raises(ValueError, match="inside"):
+        inside.apply(empty)
+    with pytest.raises(ValueError, match="no file"):
+        deck.save()
+    out = tmp_path / "fixed.i"
+    deck.apply(deck.cut(2, 1))
+    deck.save(out)
+    assert llevant.Deck.open(out).text() == deck.text()
+
+
+def test_deck_save_replaces_the_file_whole(tmp_path):
+    # Over a file: its permissions kept, no temporary file left beside it.
+    path = tmp_path / "deck.i"
+    path.write_text(OVERLAPPING)
+    path.chmod(0o640)
+    deck = llevant.Deck.open(path)
+    deck.apply(deck.cut(2, 1))
+    deck.save()
+    assert path.read_text() == deck.text()
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert [p.name for p in tmp_path.iterdir()] == ["deck.i"]
+    # A save that fails (a directory where the file would go) leaves
+    # nothing behind either.
+    where = tmp_path / "a_directory"
+    (where / "inside").mkdir(parents=True)
+    with pytest.raises(OSError):
+        deck.save(where)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a_directory", "deck.i"]
+
+
+def test_deck_does_not_save_a_file_that_is_not_utf8(tmp_path):
+    # A Latin-1 `é` in the title: writing the text read would change it.
+    path = tmp_path / "latin1.i"
+    raw = OVERLAPPING.replace("\n", " caf\xe9\n", 1).encode("latin-1")
+    path.write_bytes(raw)
+    deck = llevant.Deck.open(path)
+    with pytest.raises(ValueError, match="not UTF-8"):
+        deck.save()
+    with pytest.raises(ValueError, match="not UTF-8"):
+        deck.save(tmp_path / "other.i")
+    assert path.read_bytes() == raw
+
+
+def test_deck_refuses_a_cut_planned_before_another_even_of_another_cell():
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    first = deck.cut(2, 1)
+    second = deck.cut(1, 2)
+    deck.apply(first)
+    with pytest.raises(ValueError, match="changed since"):
+        deck.apply(second)
+    # Planned again after the undo, it is written.
+    deck.undo()
+    deck.apply(deck.cut(1, 2))
+    assert "#2" in deck.text()
+
+
+def test_deck_refuses_cells_that_would_complement_each_other():
+    deck = llevant.Deck.from_text(
+        "t\n1 0 -1 imp:n=1\n2 0 #1 : -2 imp:n=1\n\n1 so 5\n2 so 9\n\n"
+    )
+    with pytest.raises(ValueError, match="complement each other"):
+        deck.cut(1, 2)
+
+
+def test_deck_refuses_a_cut_cell_that_is_a_like_cell():
+    deck = llevant.Deck.from_text(
+        "t\n1 0 -1 imp:n=1\n2 like 3 but imp:n=2\n3 0 -2 imp:n=1\n\n1 so 5\n2 sx 4 5\n\n"
+    )
+    with pytest.raises(ValueError, match="LIKE"):
+        deck.cut(1, 2)
+
+
+def test_deck_refuses_a_cut_planned_before_another():
+    deck = llevant.Deck.from_text(OVERLAPPING)
+    first = deck.cut(2, 1)
+    second = deck.cut(2, 3)
+    deck.apply(first)
+    with pytest.raises(ValueError, match="changed since"):
+        deck.apply(second)
+    assert "#1" in deck.text()
