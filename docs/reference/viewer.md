@@ -140,7 +140,8 @@ more). "Number them from … by …" renumbers them in order, every reference wi
 (`#n`, `LIKE n BUT`, tallies…, as migjorn follows them; those it cannot are left as
 written and named in the status). A single cell, material, surface or universe is
 renumbered from its page ("Number"). The numbers taken must be free: renumbering into
-numbers being freed is refused, so that the edit can be taken back card by card.
+numbers being freed is refused, so that the edit can be taken back card by card. A
+material cannot be numbered 0 (void): to make cells void, edit the cells.
 
 The viewer remembers the files opened last, the theme, the workspace shown, the
 panel each workspace last showed and how the sides are laid out in `%APPDATA%\llevant\viewer.json` (`~/.config/llevant/viewer.json`;
