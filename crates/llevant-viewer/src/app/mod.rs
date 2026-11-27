@@ -864,17 +864,13 @@ fn save_cards(input: &std::path::Path, text: &str) -> Result<String, String> {
     }
 }
 
-/// Write the input as `source` has it to `path`, card by card; the file's
-/// modification time after.
+/// Write the input as `source` has it to `path`, card by card, whole or not
+/// at all (`Source::save_to`); the file's modification time after.
 fn write_input(
     source: &llevant_scene::source::Source,
     path: &std::path::Path,
 ) -> std::io::Result<std::time::SystemTime> {
-    use std::io::Write;
-    let mut w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
-    source.write_source(&mut w)?;
-    w.flush()?;
-    drop(w);
+    source.save_to(path)?;
     std::fs::metadata(path)?.modified()
 }
 

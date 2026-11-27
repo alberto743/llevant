@@ -418,6 +418,69 @@ impl Source {
     pub fn write_source(&self, w: &mut impl io::Write) -> io::Result<()> {
         self.tree().write_source(w)
     }
+
+    /// Write the input as it is now to the file `path`, whole or not at
+    /// all: see [`replace_file`].
+    pub fn save_to(&self, path: &Path) -> io::Result<()> {
+        replace_file(path, |w| self.write_source(w))
+    }
+}
+
+/// Write the file `path` with `write`, through a new file beside it, synced,
+/// then renamed over it: whole or not at all (a failure leaves `path` as it
+/// was, and removes the new file). Through a link, the file it points to is
+/// replaced; the new file takes the permissions of the one it replaces.
+pub fn replace_file(
+    path: &Path,
+    write: impl FnOnce(&mut io::BufWriter<std::fs::File>) -> io::Result<()>,
+) -> io::Result<()> {
+    use std::io::Write;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a file name"))?;
+    let dir = target
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let (tmp, file) = (0..1000)
+        .find_map(|k| {
+            let tmp = dir.join(format!(
+                ".{}.{}-{k}.tmp",
+                name.to_string_lossy(),
+                std::process::id()
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
+                r => Some(r.map(|f| (tmp, f))),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "no free name for the temporary file",
+            ))
+        })?;
+    let written = (|| {
+        let mut w = io::BufWriter::with_capacity(1 << 20, file);
+        write(&mut w)?;
+        w.flush()?;
+        let file = w.into_inner().map_err(|e| e.into_error())?;
+        if let Ok(m) = std::fs::metadata(&target) {
+            file.set_permissions(m.permissions())?;
+        }
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// The slot and text of the card of `kind` and number `id`.
@@ -516,6 +579,46 @@ mod tests {
         )
         .unwrap();
         assert!(!Source::load(&utf8).unwrap().not_utf8());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A save replaces the file whole, keeping its permissions and leaving
+    /// nothing beside it; one that fails leaves the file as it was.
+    #[test]
+    fn a_save_replaces_the_file_whole_or_not_at_all() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("llevant-save-{}-{nanos}", std::process::id()));
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(&dir).unwrap();
+        let path = dir.join("deck.i");
+        let old = "t\n1 0 -1 imp:n=1\n2 0 1 imp:n=0\n\n1 so 5\n\n";
+        std::fs::write(&path, old).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        let failed = replace_file(&path, |w| {
+            io::Write::write_all(w, b"half")?;
+            Err(io::Error::other("stopped"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
+        let s = Source::from_str(&old.replace("so 5", "so 6"));
+        s.save_to(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), s.to_source());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o640);
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
