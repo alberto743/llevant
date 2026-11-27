@@ -245,11 +245,6 @@ pub fn read<T, R>(slot: &Slot<T>, f: impl FnOnce(Option<&Result<T, String>>) -> 
     f(g.as_ref())
 }
 
-/// The last check started (a larger number is a check started later).
-pub fn check_id(doc: &crate::document::Document) -> u64 {
-    doc.results.checks_started
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

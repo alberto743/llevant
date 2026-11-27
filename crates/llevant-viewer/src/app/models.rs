@@ -322,7 +322,7 @@ impl ViewerApp {
                     doc.source = self.source.clone();
                     doc.input_meshes = self.input_meshes.clone();
                     // A cut written: the check of what it changed is next.
-                    let check = crate::cutflow::check_id(doc);
+                    let check = doc.results.checks_started;
                     if let Some(f) = &mut doc.cut_flow {
                         f.written(doc.source.as_ref(), check);
                     }

@@ -72,7 +72,11 @@ out of time: `same` gives `None`) the plain `A #B` is written, which needs none
 `source/cut.rs` `the_card_written_is_proven_from_its_text` tells a card that lost its
 parentheses). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
-keeps its cell, and the simplified and plain cuts label every point alike. "Every point"
+keeps its cell, and the simplified and plain cuts label every point alike; for random A,
+B and a third cell C over random spheres and planes, A writing `#C` or not, both paths
+(expansion then simplification, and one step) give cell A exactly `A ∩ ¬B` at every
+sampled point, leave B and C as they were, and call a cut empty only when no point of
+`A ∩ ¬B` is found (`any_cut_is_a_and_not_b_at_every_point`). "Every point"
 is every point off the surfaces: the proof treats each surface sense as true or false, so
 within the tolerance of a surface a shorter form can give another label than the longer
 one (`1 (-1:2) -3` written `1 2 -3` is false, not on-surface, on surface 1 where `2` is
@@ -152,6 +156,14 @@ overlap with B is called new only against a check before the cut that covered ev
 the one after did and did not find it
 (`an_overlap_is_new_only_against_a_check_that_looked_there`).
 
+Under random sequences of propose, apply (a stale plan too), simplify, accept, revert,
+cancel, other edits, Undo, Save, and commands sent while an edit loads or the load
+cancelled, the input is what its edits say: each change is one edit listed, Undo takes back
+the last, Revert takes back only the cut's own edit and only while it is the last, a stale
+plan or a command sent mid-load writes nothing, Save writes the input as it is, and a flow
+left open is of the input as it is (`tests/app/editing.rs`
+`the_cut_flow_keeps_the_input_and_its_edits_in_step`).
+
 ## Editing the input
 
 `llevant_scene::source::Source` keeps an input's migjorn tree and changes one card of
@@ -182,24 +194,32 @@ changed by migjorn on the card alone, so only the words changed differ and the i
 itself is touched only by the edit that follows (`source/fields.rs` tests, with the
 app test `cell_fields_edited`: a parameter added leaves the rest of the card byte for
 byte). A geometry with as many terms keeps the card's line breaks; any other is
-written again within 128 columns (`geometry_written_term_by_term`). `wrap_long_lines`
-breaks a line over 128 columns between words, or inside a word of geometry before a `:`
-or a `)` and after a `(` (a union printed without blanks, as the expansion of a `#n`),
-never inside a number or a keyword. After the first keyword it still breaks between
-words, but no longer inside one: a `fill=` range `0:0` stays whole (`a_fill_range_is_never_broken_at_its_colon`,
-`a_fill_range_on_a_continuation_line_is_never_broken`). It counts characters, not bytes.
-A `$` comment stays at the end of the last line, a word moved down to make room, else on
-a continuation line of its own while that fits (still a `$` comment, so a label stays
-one, `a_label_stays_a_label_when_the_card_wraps`), else it becomes `c` lines after the
-card, all of its text kept; a cut that makes that happen warns of it before Apply
+written again within 128 columns (`geometry_written_term_by_term`).
+
+A line is read as MCNP reads it, by one rule each in `source/lines.rs`, used by what writes
+cards and by what shows them: columns, a tab moving to the next multiple of 8; a comment
+line, `c` within the first five columns then a blank or the end; a blank line, which ends
+a block (`source/lines.rs` tests, migjorn's cases). Columns are what the 128-column checks
+count. `wrap_long_lines` breaks a line over 128 columns between words, or inside a word of
+geometry before a `:` or a `)` and after a `(` (a union printed without blanks, as the
+expansion of a `#n`), never inside a number or a keyword. After the first keyword it
+still breaks between words, but no longer inside one: a `fill=` range `0:0` stays whole
+(`a_fill_range_is_never_broken_at_its_colon`,
+`a_fill_range_on_a_continuation_line_is_never_broken`). A `$` comment stays at the end of
+the last line, a word moved down to make room, else on a continuation line of its own
+while that fits (with one blank after the `$` if need be; still a `$` comment, so a label
+stays one, `a_label_stays_a_label_when_the_card_wraps`), else it becomes `c` lines, all of
+its text kept; a cut that makes that happen warns of it before Apply
 (`a_label_that_cannot_stay_a_label_is_warned_of`). Every line it writes fits, except a
 comment line that was too long already and a piece that cannot be broken and is longer
 than the 123 columns a continuation line has after its five blanks (`Source::edit` then
-refuses the card). The card reads back the same geometry and parameters
-(`a_union_without_spaces_is_broken_at_its_colons`,
-`a_comment_is_kept_and_the_lines_still_fit`, `non_ascii_lines_are_wrapped_by_characters`,
-300 random long cards in `random_long_cards_fit_and_read_back_the_same`, and a cut by a
-cell of 40 planes in `source/cut.rs` `a_long_cut_fits_mcnp_columns`).
+refuses the card); none is blank. The card reads back the same geometry and parameters,
+every comment line as it was (`long_cards_wrap_to_what_mcnp_reads_the_same`: random cards
+with comment lines above and inside, continuation lines of blanks or a tab, some holding
+only a `$` comment, unions with and without blanks, `#n`, `fill` ranges and labels;
+`a_union_without_spaces_is_broken_at_its_colons`; a cut by a cell of 40 planes in
+`source/cut.rs` `a_long_cut_fits_mcnp_columns`). The diff of a simplification shows each
+comment line whole (`panels/inspector/diff.rs` `wrapped_cards_show_each_comment_line_whole`).
 Many cards are written as one edit with `Source::edit_many` (all or none: on an error
 the cards written are put back) and taken back with `restore_all`; `cells_with` gives
 the cards of many cells with the same changes (`many_cards_all_or_none`,
