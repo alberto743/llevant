@@ -562,6 +562,60 @@ mod tests {
         );
     }
 
+    /// On cards as a cut writes them (wrapped, a label too long for its
+    /// card become comment lines, comment lines above), every comment line is
+    /// one line of the diff, as written, and every word of the code is shown.
+    #[test]
+    fn wrapped_cards_show_each_comment_line_whole() {
+        let mut r = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |n: u64| {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+            r % n
+        };
+        for case in 0..300 {
+            let groups: Vec<String> = (0..1 + next(30))
+                .map(|_| {
+                    let t: Vec<String> = (0..1 + next(10))
+                        .map(|_| format!("-{}", 1 + next(99_999)))
+                        .collect();
+                    if next(2) == 0 {
+                        format!("({})", t.join(":"))
+                    } else {
+                        t.join(" ")
+                    }
+                })
+                .collect();
+            let header = "c a header line\n".repeat(next(3) as usize);
+            let label = "x".repeat(next(140) as usize);
+            let card = format!("{header}1 0 {} imp:n=1 $ {label}\n", groups.join(" "));
+            let card = llevant_scene::source::wrap_long_lines(&card);
+            let shown = display_lines(&card);
+            for l in card.lines().filter(|l| is_comment(l)) {
+                assert!(
+                    shown.iter().any(|s| s == l.trim_end()),
+                    "case {case}: {l:?} split:\n{card}\n{shown:#?}"
+                );
+            }
+            let words = |t: &[String]| -> Vec<String> {
+                t.iter()
+                    .filter(|l| !is_comment(l) && !l.starts_with('$'))
+                    .flat_map(|l| {
+                        l.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ':')
+                    })
+                    .filter(|w| !w.is_empty())
+                    .map(String::from)
+                    .collect()
+            };
+            let code: Vec<String> = card
+                .lines()
+                .map(|l| l.split('$').next().unwrap_or("").to_string())
+                .collect();
+            assert_eq!(words(&shown), words(&code), "case {case}:\n{card}");
+        }
+    }
+
     #[test]
     fn the_line_diff_finds_what_changed() {
         let a: Vec<String> = ["2 0", "(-2:-4)", "3", "(1:-3)", "imp:n=1"]

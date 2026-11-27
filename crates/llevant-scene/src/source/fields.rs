@@ -713,16 +713,16 @@ fn pieces<'a>(code: &'a str, in_geometry: &mut bool) -> Vec<(&'a str, bool)> {
     out
 }
 
-/// `note` (a `$` comment) on a continuation line of its own if it fits (it
-/// stays a `$` comment, so a label of the cell stays one), else as
-/// comment lines ([`comment_lines`]).
+/// `note` (a `$` comment) on a continuation line of its own if it fits, as
+/// written or with one blank after the `$` (it stays a `$` comment, so a
+/// label of the cell stays one), else as comment lines ([`comment_lines`]).
 fn own_line_or_comments(note: &str, newline: &str) -> String {
-    let line = format!("     {note}");
-    if columns(&line) <= super::MAX_COLUMNS {
-        format!("{line}{newline}")
-    } else {
-        comment_lines(note, newline)
-    }
+    let text = note.trim_start_matches('$').trim();
+    [format!("     {note}"), format!("     $ {text}")]
+        .into_iter()
+        .find(|l| columns(l) <= super::MAX_COLUMNS)
+        .map(|l| format!("{l}{newline}"))
+        .unwrap_or_else(|| comment_lines(note, newline))
 }
 
 /// `note` (a `$` comment) as comment lines, each within
@@ -970,6 +970,7 @@ pub fn general_forms(mnemonic: &str, c: &[f64]) -> Vec<(&'static str, Vec<f64>)>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     const INPUT: &str = "title
 1 1 -7.8 -1 imp:n=1 $ the ball
@@ -1123,7 +1124,8 @@ m2 1001 2
         assert_eq!(c.params.len(), 1);
     }
 
-    /// Cell `id` of `card`, read alone: its geometry and its parameters.
+    /// Cell `id` of `card`, read alone: its geometry and its parameters
+    /// (each value as its words: a line break in one is a blank to MCNP).
     fn read_alone(card: &str, id: i64) -> (migjorn::Expr, Vec<(String, String)>) {
         let s = Source::from_str(&format!("t\n{}\n\n1 so 1\n\n", card.trim_end()));
         let g = s
@@ -1137,7 +1139,10 @@ m2 1001 2
             .unwrap()
             .params
             .iter()
-            .map(|p| (p.key.clone(), p.value.clone()))
+            .map(|p| {
+                let words: Vec<&str> = p.value.split_whitespace().collect();
+                (p.key.clone(), words.join(" "))
+            })
             .collect();
         (g, p)
     }
@@ -1249,86 +1254,108 @@ m2 1001 2
         assert_eq!(w.matches('x').count(), 125, "{w}");
     }
 
-    #[test]
-    fn a_comment_is_kept_and_the_lines_still_fit() {
-        let geometry = vec!["-1 2"; 40].join(" ");
-        for n in [1, 30, 60, 100, 125, 200] {
-            let note: String = "x".repeat(n);
-            let card = format!("1 0 {geometry} imp:n=1 $ {note}\n");
-            let w = wrap_long_lines(&card);
-            assert!(fits(&w), "{n}:\n{w}");
-            assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{n}:\n{w}");
-            assert_eq!(w.matches('x').count(), n, "the comment is all there:\n{w}");
-        }
-    }
-
-    #[test]
-    fn non_ascii_lines_are_wrapped_by_characters() {
-        let geometry = vec!["-1 2"; 40].join(" ");
-        let card = format!("1 0 {geometry} imp:n=1 $ zona più calda – µ\n");
-        let w = wrap_long_lines(&card);
-        assert!(fits(&w), "{w}");
-        assert!(w.contains("$ zona più calda – µ"), "{w}");
-        assert_eq!(read_alone(&w, 1), read_alone(&card, 1));
-    }
-
-    /// A continuation line holding only a long `$` comment becomes comment
-    /// lines, with no line of blanks before them (MCNP would end the cell
-    /// block there).
-    #[test]
-    fn a_comment_only_continuation_leaves_no_blank_line() {
-        let card = format!("1 0 -1 2\n     $ {}\n     imp:n=1\n", "é".repeat(124));
-        let w = wrap_long_lines(&card);
-        assert!(fits(&w), "{w}");
-        assert!(w.lines().all(|l| !l.trim().is_empty()), "{w:?}");
-        assert!(
-            w.contains(&"é".repeat(100)),
-            "the comment is all there:\n{w}"
-        );
-        assert_eq!(read_alone(&w, 1), read_alone(&card, 1));
-    }
-
-    fn step(seed: &mut u64, n: u64) -> u64 {
-        *seed ^= *seed << 13;
-        *seed ^= *seed >> 7;
-        *seed ^= *seed << 17;
-        *seed % n
-    }
-
-    #[test]
-    fn random_long_cards_fit_and_read_back_the_same() {
-        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
-        for case in 0..300 {
-            let mut geometry = String::new();
-            for _ in 0..1 + step(&mut seed, 30) {
-                let n = 1 + step(&mut seed, 12) as usize;
-                let terms: Vec<String> = (0..n)
-                    .map(|_| {
-                        let sign = if step(&mut seed, 2) == 0 { "-" } else { "" };
-                        format!("{sign}{}", 1 + step(&mut seed, 99_999))
-                    })
-                    .collect();
-                geometry += &match step(&mut seed, 3) {
-                    0 => format!("({}) ", terms.join(":")),
-                    1 => format!("{} ", terms.join(" ")),
-                    _ => format!("({}) ", terms.join(" : ")),
+    /// A long card as people write them: comment lines above and inside it,
+    /// continuation lines (five blanks, more, or a tab), some holding only a
+    /// `$` comment, geometry with unions written with or without blanks and
+    /// `#n`, parameters with `fill` ranges, a label.
+    fn long_card() -> impl Strategy<Value = String> {
+        let term = (1u32..100_000, any::<bool>())
+            .prop_map(|(n, neg)| format!("{}{n}", if neg { "-" } else { "" }));
+        let group = (prop::collection::vec(term, 1..12), 0..4u8).prop_map(|(t, how)| match how {
+            0 => format!("({})", t.join(":")),
+            1 => t.join(" "),
+            2 => format!("({})", t.join(" : ")),
+            _ => format!("#{}", 2 + t.len()),
+        });
+        let note = prop::collection::vec(prop::sample::select(vec!["x", "é", " "]), 0..140)
+            .prop_map(|v| format!("$ {}", v.concat()).trim_end().to_string());
+        let comment = (
+            prop::sample::select(vec!["c", "C", "  c", "c\t"]),
+            0..60usize,
+        )
+            .prop_map(|(c, n)| format!("{c} {}", "q".repeat(n)).trim_end().to_string());
+        let lead = prop::sample::select(vec!["     ", "        ", "\t"]);
+        // After each group: go on, a new line, a comment line, or a line
+        // with only a `$` comment.
+        let after = (0..6u8, lead.clone(), comment.clone(), note.clone());
+        (
+            prop::collection::vec(comment, 0..3),
+            any::<bool>(),
+            prop::collection::vec((group, after), 1..30),
+            any::<bool>(),
+            prop::option::of(note),
+            lead,
+        )
+            .prop_map(|(header, material, body, lattice, label, last)| {
+                let mut lines: Vec<String> = header;
+                let mut cur = String::from(if material { "1 5 -7.8" } else { "1 0" });
+                for (g, (how, lead, comment, note)) in body {
+                    cur = format!("{cur} {g}");
+                    match how {
+                        0 => {
+                            lines.push(std::mem::replace(&mut cur, lead.to_string()));
+                        }
+                        1 => {
+                            lines.push(std::mem::replace(&mut cur, lead.to_string()));
+                            lines.push(comment);
+                        }
+                        2 => {
+                            lines.push(std::mem::replace(&mut cur, lead.to_string()));
+                            lines.push(format!("{lead}{note}"));
+                        }
+                        _ => {}
+                    }
+                }
+                let params = if lattice {
+                    "imp:n=1 u=1 lat=1 fill=0:0 0:1 -1:1 1 2 3 4 5 6"
+                } else {
+                    "imp:n=1 vol=2"
                 };
-            }
-            let letter = if step(&mut seed, 2) == 0 { "x" } else { "é" };
-            let note = letter.repeat(step(&mut seed, 140) as usize);
-            let card = if note.is_empty() {
-                format!("1 0 {geometry}imp:n=1 vol=2\n")
-            } else {
-                format!("1 0 {geometry}imp:n=1 vol=2 $ {note}\n")
-            };
+                cur = format!("{cur} {params}");
+                if cur.trim().is_empty() {
+                    cur = format!("{last}{params}");
+                }
+                if let Some(l) = label {
+                    cur = format!("{cur} {l}");
+                }
+                lines.push(cur);
+                lines.join("\n") + "\n"
+            })
+    }
+
+    proptest! {
+        /// `wrap_long_lines` on any such card: every line fits MCNP's
+        /// columns, none is blank (that would end the cell block), the
+        /// geometry and parameters read back the same, every comment line
+        /// stays as it was, no letter of a comment is lost, and the labels
+        /// stay labels while each fits on a line of its own.
+        #[test]
+        fn long_cards_wrap_to_what_mcnp_reads_the_same(card in long_card()) {
             let w = wrap_long_lines(&card);
-            assert!(fits(&w), "case {case}:\n{w}");
-            assert_eq!(
-                read_alone(&w, 1),
-                read_alone(&card, 1),
-                "case {case}:\n{card}\n{w}"
-            );
-            assert_eq!(w.matches(letter).count(), note.chars().count(), "{w}");
+            prop_assert!(fits(&w), "{card}\n=>\n{w}");
+            prop_assert!(!w.lines().any(super::super::lines::is_blank), "{w:?}");
+            prop_assert_eq!(read_alone(&w, 1), read_alone(&card, 1), "{}\n=>\n{}", card, w);
+            let comments = |t: &str| -> Vec<String> {
+                t.lines()
+                    .filter(|l| super::super::lines::is_comment(l) && l.contains('q'))
+                    .map(String::from)
+                    .collect()
+            };
+            prop_assert_eq!(comments(&w), comments(&card), "{}", w);
+            for letter in ['x', 'é', 'q'] {
+                prop_assert_eq!(w.matches(letter).count(), card.matches(letter).count(), "{}", w);
+            }
+            let labels = |t: &str| -> Vec<String> {
+                let s = Source::from_str(&format!("t\n{}\n\n1 so 1\n\n", t.trim_end()));
+                let tree = s.tree();
+                tree.cell(1).unwrap().comments().into_iter().map(String::from).collect()
+            };
+            let all_fit = labels(&card)
+                .iter()
+                .all(|l| columns(&format!("     $ {l}")) <= super::super::MAX_COLUMNS);
+            if all_fit {
+                prop_assert_eq!(labels(&w), labels(&card), "{}", w);
+            }
         }
     }
 

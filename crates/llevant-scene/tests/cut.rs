@@ -385,3 +385,164 @@ fn the_overlap_zoo_is_cut_or_refused() {
         }
     }
 }
+
+/// A random cell geometry over surfaces 1 to 9: unions and intersections,
+/// nested.
+#[derive(Clone, Debug)]
+enum G {
+    Lit(i32),
+    And(Vec<G>),
+    Or(Vec<G>),
+}
+
+impl G {
+    fn text(&self) -> String {
+        match self {
+            G::Lit(n) => n.to_string(),
+            G::And(v) => format!("({})", v.iter().map(G::text).collect::<Vec<_>>().join(" ")),
+            G::Or(v) => format!("({})", v.iter().map(G::text).collect::<Vec<_>>().join(":")),
+        }
+    }
+}
+
+fn geometry() -> impl proptest::strategy::Strategy<Value = G> {
+    use proptest::prelude::*;
+    let leaf = (1i32..=9, any::<bool>()).prop_map(|(s, neg)| G::Lit(if neg { -s } else { s }));
+    leaf.prop_recursive(3, 12, 3, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 2..4).prop_map(G::And),
+            prop::collection::vec(inner, 2..4).prop_map(G::Or),
+        ]
+    })
+}
+
+/// Surfaces 1 to 6 spheres, 7 to 9 planes `px`, `py`, `pz`; and the
+/// signed distance of a point to each (to keep sampled points off them).
+#[derive(Clone, Debug)]
+struct Surfaces(Vec<(Vec3, f64)>, [f64; 3]);
+
+impl Surfaces {
+    fn cards(&self) -> String {
+        let mut s = String::new();
+        for (k, (c, r)) in self.0.iter().enumerate() {
+            s += &format!("{} s {} {} {} {r}\n", k + 1, c[0], c[1], c[2]);
+        }
+        for (k, (name, d)) in ["px", "py", "pz"].iter().zip(self.1).enumerate() {
+            s += &format!("{} {name} {d}\n", k + 7);
+        }
+        s
+    }
+
+    fn near(&self, p: &Vec3) -> bool {
+        let close = |d: f64| d.abs() < 1e-4;
+        self.0.iter().any(|(c, r)| {
+            close(
+                ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt() - r,
+            )
+        }) || (0..3).any(|i| close(p[i] - self.1[i]))
+    }
+}
+
+fn surfaces() -> impl proptest::strategy::Strategy<Value = Surfaces> {
+    use proptest::prelude::*;
+    let x = || -5.0f64..5.0;
+    (
+        prop::collection::vec(([x(), x(), x()], 2.0f64..7.0), 6),
+        [-4.0f64..4.0, -4.0f64..4.0, -4.0f64..4.0],
+    )
+        .prop_map(|(s, p)| Surfaces(s, p))
+}
+
+/// The cells holding each point (all of them where cells overlap).
+fn holders(text: &str, pts: &[Vec3]) -> Vec<Vec<i64>> {
+    let m = Model::from_text(text, &Options::default());
+    let found = reference::classify(&m, pts, Depth::All);
+    found
+        .ids
+        .iter()
+        .map(|&id| {
+            let l = &found.labels[id as usize];
+            match l.status {
+                Status::Inside => vec![m.cell_id(l.path.last().unwrap().cell)],
+                Status::Overlap => l.involved.iter().map(|&c| m.cell_id(c)).collect(),
+                _ => Vec::new(),
+            }
+        })
+        .collect()
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+    /// Any A cut by B, in both ways the input is written (the viewer's
+    /// expansion then simplification, and Python's one step): at every
+    /// sampled point off the surfaces, cell 1 is A ∩ ¬B, cells 2 and 3 are as
+    /// they were, and a cut called empty leaves no point of A ∩ ¬B. Cell A
+    /// may write `#3`, kept or expanded.
+    #[test]
+    fn any_cut_is_a_and_not_b_at_every_point(
+        a in geometry(),
+        b in geometry(),
+        c in geometry(),
+        a_writes_c in proptest::prelude::any::<bool>(),
+        s in surfaces(),
+        seed in 0u64..u64::MAX,
+    ) {
+        let a_text = if a_writes_c { format!("{} #3", a.text()) } else { a.text() };
+        let deck = format!(
+            "random cut\n1 0 {a_text} imp:n=1\n2 0 {} imp:n=1\n3 0 {} imp:n=1\n\
+             8 0 -99 #1 #2 #3 imp:n=1\n9 0 99 imp:n=0\n\n{}99 so 50\n\n",
+            b.text(),
+            c.text(),
+            s.cards()
+        );
+        let mut r = seed | 1;
+        let mut next = || {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+            (r % 2_000_001) as f64 / 100_000.0 - 10.0
+        };
+        let pts: Vec<Vec3> = (0..600)
+            .map(|_| [next(), next(), next()])
+            .filter(|p| !s.near(p))
+            .collect();
+        let before = holders(&deck, &pts);
+        let check = |text: &str, step: &str| -> Result<(), proptest::test_runner::TestCaseError> {
+            let after = holders(text, &pts);
+            for ((p, was), now) in pts.iter().zip(&before).zip(&after) {
+                let want = was.contains(&1) && !was.contains(&2);
+                proptest::prop_assert_eq!(now.contains(&1), want, "{} at {:?}:\n{}", step, p, text);
+                for k in [2, 3] {
+                    proptest::prop_assert_eq!(now.contains(&k), was.contains(&k), "{} cell {} at {:?}", step, k, p);
+                }
+            }
+            Ok(())
+        };
+        let left = pts.iter().zip(&before).any(|(_, was)| was.contains(&1) && !was.contains(&2));
+
+        // The viewer: expansion, then simplification.
+        let src = Source::from_str(&deck);
+        let e = src.cut_expand(1, 2, &Limits::default()).unwrap();
+        if e.empty {
+            proptest::prop_assert!(!left, "called empty, but A ∩ ¬B has points:\n{deck}");
+        } else {
+            src.apply_expand(&e).unwrap();
+            check(&src.to_source(), "expanded")?;
+            let r = src.cell_simplify(1, &Limits::default()).unwrap();
+            if r.simplified {
+                src.apply_simplified(&r).unwrap();
+                check(&src.to_source(), "simplified")?;
+            }
+        }
+        // Python: one step.
+        let src = Source::from_str(&deck);
+        let plan = src.cut_plan(1, 2, true).unwrap();
+        if plan.result.empty {
+            proptest::prop_assert!(!left, "called empty, but A ∩ ¬B has points:\n{deck}");
+        } else {
+            src.apply_cut(&plan).unwrap();
+            check(&src.to_source(), "one step")?;
+        }
+    }
+}

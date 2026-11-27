@@ -1649,3 +1649,233 @@ fn the_cut_buttons_open_and_close_the_cut() {
     assert_eq!(flow_phase(&h), "none", "a second click closes it");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The cut flow under random sequences of what can be done to it: propose,
+/// apply (a stale plan too), simplify, accept, revert, cancel, other edits,
+/// Undo, Save, and a command sent while an edit is still loading, or the
+/// load cancelled. After each step the input is what the edits listed say:
+/// every change is one edit, Undo takes back the last, Revert takes back
+/// only the cut's own edit (and only while it is the last), a stale plan or
+/// a command sent mid-load writes nothing, and a flow left open matches the
+/// input.
+#[test]
+fn the_cut_flow_keeps_the_input_and_its_edits_in_step() {
+    use llevant_viewer::cutflow::{self, Phase};
+    if !adapter_available() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let _one = serial();
+    let (mut h, dir) = overlap_harness("cutstate");
+    let path = dir.join("overlap.i");
+    let text = |h: &Harness<'_, ViewerApp>| {
+        let d = h.state().document().unwrap();
+        d.source.as_ref().unwrap().to_source()
+    };
+    let revision = |h: &Harness<'_, ViewerApp>| {
+        let d = h.state().document().unwrap();
+        d.source.as_ref().unwrap().revision()
+    };
+    // Nothing under way: no load, job, planning or simplification.
+    let idle = |a: &ViewerApp| {
+        !a.is_loading()
+            && a.document().is_some_and(|d| {
+                d.results.jobs.is_empty()
+                    && d.cut_flow.as_ref().is_none_or(|f| match &f.phase {
+                        Phase::Planning(s) => cutflow::read(s, |r| r.is_some()),
+                        Phase::Simplifying { slot, .. } => cutflow::read(slot, |r| r.is_some()),
+                        Phase::Applying(_) => false,
+                        Phase::Verifying { .. } => true,
+                    })
+            })
+    };
+    let written = |h: &Harness<'_, ViewerApp>| {
+        let d = h.state().document().unwrap();
+        d.cut_flow
+            .as_ref()
+            .is_some_and(|f| f.is_written() && f.is_of(d.source.as_ref()))
+    };
+    // An edit of a cell the cut does not touch: its card changed either way.
+    let other = |h: &Harness<'_, ViewerApp>| {
+        let card = if cell_card(h, 5).contains("vol") {
+            "5 0 5 imp:n=0"
+        } else {
+            "5 0 5 imp:n=0 vol=1"
+        };
+        Command::EditCard(llevant_scene::source::CardKind::Cell, 5, card.into())
+    };
+    for seed in [
+        0x9e37_79b9_7f4a_7c15_u64,
+        0x2545_f491_4f6c_dd1d,
+        0xd1b5_4a32_d192_ed03,
+        0x94d0_49bb_1331_11eb,
+    ] {
+        // The texts after each edit listed, the first the input as read;
+        // `cut_at`: which of them the cut wrote.
+        let mut texts = vec![text(&h)];
+        let mut cut_at: Option<usize> = None;
+        let mut stale: Option<llevant_scene::source::CutExpand> = None;
+        let mut r = seed;
+        let mut next = |n: u64| {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+            r % n
+        };
+        for step in 0..24 {
+            let prev = text(&h);
+            // Mostly the next step of the flow, so that sequences go through
+            // it; anything else at any point.
+            let likely: &[u64] = match flow_phase(&h) {
+                "planning" => &[2, 2, 2, 2],
+                "verifying" => &[4, 4, 4, 6, 6],
+                "simplifying" => &[5, 5, 5, 6],
+                _ => &[0, 0, 1],
+            };
+            let k = next(likely.len() as u64 + 12) as usize;
+            let op = likely.get(k).copied().unwrap_or((k - likely.len()) as u64);
+            let what = format!("seed {seed:x} step {step} op {op}");
+            // What may write, and whether a second command follows at once.
+            let mut writes = false;
+            let mut is_cut = false;
+            let mut is_undo = false;
+            let mut is_revert = false;
+            let revert_allowed = written(&h);
+            match op {
+                0 => send_cmd(&mut h, Command::ProposeCut { keep: 2, cut: 3 }),
+                1 => send_cmd(&mut h, Command::ProposeCut { keep: 3, cut: 2 }),
+                2 | 3 => {
+                    let plan = h.state().document().and_then(|d| {
+                        let f = d.cut_flow.as_ref()?;
+                        match &f.phase {
+                            Phase::Planning(s) => cutflow::read(s, |r| match r {
+                                Some(Ok(p)) if !p.empty => Some(p.clone()),
+                                _ => None,
+                            }),
+                            _ => None,
+                        }
+                    });
+                    let plan = if op == 3 { stale.clone() } else { plan };
+                    if let Some(p) = plan {
+                        let fresh = p.revision == revision(&h);
+                        stale = Some(p.clone());
+                        writes = fresh;
+                        is_cut = fresh;
+                        send_cmd(&mut h, Command::CutApply(p));
+                    }
+                }
+                4 => send_cmd(&mut h, Command::CutSimplify),
+                5 => {
+                    let s = h
+                        .state()
+                        .document()
+                        .and_then(|d| match &d.cut_flow.as_ref()?.phase {
+                            Phase::Simplifying { slot, .. } => cutflow::read(slot, |r| match r {
+                                Some(Ok(s)) if s.simplified => Some(s.clone()),
+                                _ => None,
+                            }),
+                            _ => None,
+                        });
+                    if let Some(s) = s {
+                        writes = true;
+                        send_cmd(&mut h, Command::CutAccept(s));
+                    }
+                }
+                6 => {
+                    is_revert = true;
+                    send_cmd(&mut h, Command::RevertCut);
+                }
+                7 => send_cmd(&mut h, Command::CancelCutFlow),
+                8 => {
+                    writes = true;
+                    let c = other(&h);
+                    send_cmd(&mut h, c);
+                }
+                9 => {
+                    is_undo = true;
+                    send_cmd(&mut h, Command::UndoInputEdit);
+                }
+                10 => {
+                    send_cmd(&mut h, Command::SaveInput);
+                    step_until(&mut h, "the save", |a| !a.input_edits().1);
+                    assert_eq!(
+                        std::fs::read_to_string(&path).unwrap(),
+                        prev,
+                        "{what}: saved"
+                    );
+                }
+                _ => {
+                    // An edit, then at once a command that must wait for it
+                    // (refused while it loads), or the load cancelled.
+                    writes = true;
+                    let c = other(&h);
+                    send_cmd(&mut h, c);
+                    if h.state().is_loading() {
+                        let second = match next(4) {
+                            0 => Command::RevertCut,
+                            1 => Command::CutSimplify,
+                            2 => Command::UndoInputEdit,
+                            _ => Command::CancelLoading,
+                        };
+                        send_cmd(&mut h, second);
+                    }
+                }
+            }
+            step_until(&mut h, &what, idle);
+            h.run_steps(3);
+            let now = text(&h);
+            let top = texts.len() - 1;
+            if now == prev {
+                // Refused, cancelled or nothing to do.
+            } else if is_undo || is_revert {
+                assert!(top > 0, "{what}: taken back with no edit listed");
+                assert_eq!(now, texts[top - 1], "{what}: not the last edit taken back");
+                if is_revert {
+                    assert!(
+                        revert_allowed,
+                        "{what}: Revert took back an edit with no cut written"
+                    );
+                    assert_eq!(cut_at, Some(top), "{what}: Revert took back another edit");
+                }
+                texts.pop();
+                if cut_at == Some(top) {
+                    cut_at = None;
+                }
+            } else {
+                assert!(writes, "{what}: the input changed:\n{prev}\n=>\n{now}");
+                texts.push(now.clone());
+                if is_cut {
+                    cut_at = Some(texts.len() - 1);
+                }
+            }
+            assert_eq!(
+                h.state().input_edits().0,
+                texts.len() - 1,
+                "{what}: edits listed"
+            );
+            // A flow left open is of the input as it is; one written is
+            // the last edit.
+            let d = h.state().document().unwrap();
+            if let Some(f) = &d.cut_flow {
+                assert!(
+                    f.is_of(d.source.as_ref()),
+                    "{what}: a flow of another input"
+                );
+                if f.is_written() {
+                    assert_eq!(
+                        cut_at,
+                        Some(texts.len() - 1),
+                        "{what}: written, not the last"
+                    );
+                }
+            }
+        }
+        // Back to the input as read, for the next sequence.
+        while h.state().input_edits().0 > 0 {
+            send_cmd(&mut h, Command::UndoInputEdit);
+            step_until(&mut h, "undo", idle);
+        }
+        send_cmd(&mut h, Command::CancelCutFlow);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
