@@ -60,14 +60,15 @@ that meet an overlap, stopping at it or seeing through it, are not compared.
 `A #B`, or in fewer terms when `simplify`). The shorter form uses only the laws of Boolean
 algebra on the surface senses as independent variables (a macrobody facet is a variable
 of its own, and so is each `#n` kept), so it is the same region for any surfaces. Every
-card is proven before it is written, read back from its text as MCNP reads it
+expanded or simplified card is proven before it is written, read back from its text as MCNP reads it
 (`Source::proves`, `algebra::same`): the reduced ordered BDDs of `A ∩ ¬B` and of the card
 must be the same node, first with each `#n` a variable, else with every `#n` expanded by
 De Morgan. A `#n` that cannot be expanded is the same unknown region on both sides: equal
 so is equal, unequal so says nothing
 (`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one`). A card proven
-different is an error and nothing is written; one too large to prove is written as the
-plain `A #B` (`source/algebra.rs` tests, among them 400 random cuts compared with truth
+different is an error and nothing is written. When there is no completed proof (too large,
+or the limits run out first, `same` giving `None`), the plain `A #B` is written instead,
+which needs none: it is `A ∩ ¬B` as MCNP reads it (`source/algebra.rs` tests, among them 400 random cuts compared with truth
 tables; `source/cut.rs` `the_card_written_is_proven_from_its_text` tells a card that lost
 its parentheses). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
@@ -110,7 +111,8 @@ copies; a `keep` cut by `#cut` already, in a nested intersection too
 make the two cells write each other's complement, directly or through other cells, a
 `LIKE m BUT` cell counting as writing what m writes
 (`a_cut_that_would_make_cells_complement_each_other_is_refused`); and any input that
-gives `U` or `TRCL` on a data card, which is not read, refused by `cell_simplify` as well
+gives `U` or `TRCL` on a data card, which is not read, or has a `READ` card (whose cards
+are not read either), refused by `cell_simplify` as well
 (`a_cut_is_refused_when_cells_are_placed_by_a_data_card`,
 `a_simplification_is_refused_when_cells_are_placed_by_a_data_card`). A `cut` with a `TRCL` is
 written as `#n`, not expanded. The cells that change with `keep` are named in the

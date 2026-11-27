@@ -273,6 +273,9 @@ fn the_overlap_zoo_is_cut_or_refused() {
         (223, 222, Some("already")),
         (224, 221, None),
     ];
+    // The cases that leave nothing of `keep` (it is inside `cut`): every
+    // other one must give a card to write.
+    let empty: &[(i64, i64)] = &[(121, 122)];
     let fits = |card: &str| card.lines().all(|l| l.chars().count() <= 128);
     // Where cells meet: their boxes, in the frame their universe is placed
     // in (universe 1 fills cell 184 moved by (800, 40, 0)).
@@ -326,15 +329,14 @@ fn the_overlap_zoo_is_cut_or_refused() {
                 "{keep} #{cut} ({step}): a gap at {p:?}\n{}",
                 s.cell(keep).unwrap().text
             );
+            // B may be filled: the cell that holds the point is below it,
+            // on its path. The cells involved say where the point is only
+            // for an overlap (not for a point on a surface, or where the
+            // classification stopped at what it does not support).
+            let path = l.path.iter().map(|s| s.cell);
             let cells: Vec<u32> = match l.status {
-                // B may be filled: the cell that holds the point is below it.
-                Status::Inside => l.path.iter().map(|s| s.cell).collect(),
-                _ => l
-                    .path
-                    .iter()
-                    .map(|s| s.cell)
-                    .chain(l.involved.iter().copied())
-                    .collect(),
+                Status::Overlap => path.chain(l.involved.iter().copied()).collect(),
+                _ => path.collect(),
             };
             assert!(
                 cells.contains(&b) && !cells.contains(&a),
@@ -360,6 +362,12 @@ fn the_overlap_zoo_is_cut_or_refused() {
         };
         let pts = overlap_points(&before, keep, cut);
         assert!(!pts.is_empty(), "{keep} #{cut}: they do not overlap before");
+        assert_eq!(
+            e.empty,
+            empty.contains(&(keep, cut)),
+            "{keep} #{cut}: empty is {}",
+            e.empty
+        );
         if e.empty {
             continue;
         }

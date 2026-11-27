@@ -826,6 +826,16 @@ pub fn wrap_long_lines(card: &str) -> String {
                 used += add;
             }
         }
+        // A line with only a `$` comment: the comment alone (a line of
+        // blanks before it would end the cell block where MCNP reads it).
+        if lines.iter().all(Vec::is_empty) {
+            if note.is_empty() {
+                out.push_str(line);
+            } else {
+                out.push_str(&own_line_or_comments(note, newline));
+            }
+            continue;
+        }
         let text = |k: usize, l: &[(&str, bool)]| {
             let mut s = String::from(if k == 0 { lead } else { "     " });
             for (j, (p, blank)) in l.iter().enumerate() {
@@ -1270,6 +1280,22 @@ m2 1001 2
         let w = wrap_long_lines(&card);
         assert!(fits(&w), "{w}");
         assert!(w.contains("$ zona più calda – µ"), "{w}");
+        assert_eq!(read_alone(&w, 1), read_alone(&card, 1));
+    }
+
+    /// A continuation line holding only a long `$` comment becomes comment
+    /// lines, with no line of blanks before them (MCNP would end the cell
+    /// block there).
+    #[test]
+    fn a_comment_only_continuation_leaves_no_blank_line() {
+        let card = format!("1 0 -1 2\n     $ {}\n     imp:n=1\n", "é".repeat(124));
+        let w = wrap_long_lines(&card);
+        assert!(fits(&w), "{w}");
+        assert!(w.lines().all(|l| !l.trim().is_empty()), "{w:?}");
+        assert!(
+            w.contains(&"é".repeat(100)),
+            "the comment is all there:\n{w}"
+        );
         assert_eq!(read_alone(&w, 1), read_alone(&card, 1));
     }
 

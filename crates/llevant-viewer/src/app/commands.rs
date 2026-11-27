@@ -122,9 +122,21 @@ impl ViewerApp {
                 }
                 Command::CutApply(plan) => self.cut_apply(plan, ctx),
                 Command::CutSimplify => {
+                    // As for Revert: not while an edit cannot start, and only
+                    // for the cut written in the input as it is now.
+                    if let Some(why) = self.edit_blocked() {
+                        self.refuse_edit(&format!("cannot simplify now: {why}"));
+                        continue;
+                    }
                     if let Some(d) = &mut self.doc {
                         if let (Some(f), Some(s)) = (&mut d.cut_flow, &d.source) {
-                            f.simplify(ctx, s);
+                            if !(f.is_of(Some(s)) && f.simplify(ctx, s)) {
+                                d.messages.warn(
+                                    "cannot simplify now: the cut is not written in the input \
+                                     as it is"
+                                        .to_string(),
+                                );
+                            }
                         }
                     }
                 }

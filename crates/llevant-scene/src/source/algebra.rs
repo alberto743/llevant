@@ -205,7 +205,9 @@ pub struct Simp {
 /// A form is given only when it is proven equal to `reference` (reduced
 /// ordered BDDs, so it does not rest on the laws being coded right); when
 /// the proof is too large, or the limits stop it, there is no form and
-/// `warnings` says why.
+/// `warnings` says why. A limit that stops only the second tier leaves the
+/// shortest form found so far, proven all the same (`warnings` says the
+/// second tier was stopped); a caller that cancels drops the result.
 pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> {
     let mut out = Simp {
         expr: None,
@@ -232,13 +234,14 @@ pub fn simplify_bool(reference: &Bool, limits: &Limits) -> Result<Simp, String> 
 
     // Tier 1.
     let t1 = tree::simplify(&normal, &mut stats);
-    if t1 == Bool::False {
-        if want != FALSE {
-            return Err("internal error: an empty form is not proven empty".into());
-        }
+    // Empty as the proof says, whether or not the laws found it.
+    if want == FALSE {
         out.empty = true;
         out.trace = stats.lines();
         return Ok(out);
+    }
+    if t1 == Bool::False {
+        return Err("internal error: an empty form is not proven empty".into());
     }
     let mut forms: Vec<Bool> = vec![t1.clone()];
 
@@ -1572,6 +1575,22 @@ mod tests {
             s.warnings.iter().any(|w| w.contains("too many times")),
             "{s:?}"
         );
+    }
+
+    /// Empty as the proof says even where the tree tier does not see it:
+    /// `(a∨b)(¬a∨b)(a∨¬b)(¬a∨¬b)` takes resolution to find empty.
+    #[test]
+    fn an_empty_function_is_empty_whatever_the_first_tier_finds() {
+        let l = |id: i64, s: bool| Bool::Lit(Atom::Surface { id, facet: None }, s);
+        let or = |p: bool, q: bool| Bool::Or(vec![l(1, p), l(2, q)]);
+        let b = Bool::And(vec![
+            or(true, true),
+            or(false, true),
+            or(true, false),
+            or(false, false),
+        ]);
+        let s = simplify_bool(&b, &Limits::default()).unwrap();
+        assert!(s.empty && s.expr.is_none(), "{s:?}");
     }
 
     #[test]

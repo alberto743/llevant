@@ -693,6 +693,26 @@ def test_deck_cut_refuses_what_it_cannot_do(tmp_path):
     assert llevant.Deck.open(out).text() == deck.text()
 
 
+def test_deck_save_replaces_the_file_whole(tmp_path):
+    # Over a file: its permissions kept, no temporary file left beside it.
+    path = tmp_path / "deck.i"
+    path.write_text(OVERLAPPING)
+    path.chmod(0o640)
+    deck = llevant.Deck.open(path)
+    deck.apply(deck.cut(2, 1))
+    deck.save()
+    assert path.read_text() == deck.text()
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert [p.name for p in tmp_path.iterdir()] == ["deck.i"]
+    # A save that fails (a directory where the file would go) leaves
+    # nothing behind either.
+    where = tmp_path / "a_directory"
+    (where / "inside").mkdir(parents=True)
+    with pytest.raises(OSError):
+        deck.save(where)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a_directory", "deck.i"]
+
+
 def test_deck_does_not_save_a_file_that_is_not_utf8(tmp_path):
     # A Latin-1 `é` in the title: writing the text read would change it.
     path = tmp_path / "latin1.i"

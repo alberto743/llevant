@@ -4,6 +4,8 @@
 //! written in the fewest terms the Boolean algebra gives
 //! (the `algebra` module).
 
+use std::collections::{HashMap, HashSet};
+
 use super::algebra::{self, Cut, Limits};
 use super::fields::CellChange;
 use super::{geometry_words, CardKind, Edited, Source, Word};
@@ -55,7 +57,7 @@ pub struct CutExpand {
     pub empty: bool,
     /// `#cut` could not be expanded and stays `#cut`.
     pub plain: bool,
-    /// The cells that write `#keep` (they take in what is cut), and other
+    /// The cells that write `#keep` (they may take in what is cut), and other
     /// things to look at.
     pub warnings: Vec<String>,
     /// The cells that change with `keep` (by number): those that write
@@ -161,19 +163,39 @@ impl Source {
         // (through two complements a cell grows again: all are listed).
         // Each with the cell it changes through (`keep` itself for a cell
         // that writes `#keep`).
+        // Level by level from `keep` (in deck order within a level), over
+        // an index of who stands on whom built once: linear in the deck and
+        // its references even for a long chain.
         let mut users: Vec<(i64, i64)> = Vec::new();
-        let mut changed = vec![keep];
-        loop {
-            let more: Vec<(i64, i64)> = on
-                .iter()
-                .filter(|(n, _)| users.iter().all(|u| u.0 != *n))
-                .filter_map(|(n, deps)| Some((*n, *deps.iter().find(|d| changed.contains(d))?)))
-                .collect();
-            if more.is_empty() {
-                break;
+        let mut rev: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (i, (_, deps)) in on.iter().enumerate() {
+            for &d in deps {
+                rev.entry(d).or_default().push(i);
             }
-            changed.extend(more.iter().map(|u| u.0));
-            users.extend(more);
+        }
+        let mut changed: HashSet<i64> = HashSet::from([keep]);
+        let mut found = vec![false; on.len()];
+        let mut frontier = vec![keep];
+        while !frontier.is_empty() {
+            let mut level: Vec<usize> = frontier
+                .iter()
+                .filter_map(|d| rev.get(d))
+                .flatten()
+                .copied()
+                .filter(|&i| !found[i])
+                .collect();
+            level.sort_unstable();
+            level.dedup();
+            frontier.clear();
+            for &i in &level {
+                found[i] = true;
+                let (n, deps) = &on[i];
+                if let Some(&via) = deps.iter().find(|d| changed.contains(d)) {
+                    users.push((*n, via));
+                    frontier.push(*n);
+                }
+            }
+            changed.extend(frontier.iter().copied());
         }
         if let Some(via) = reaches(&tree, cut, keep) {
             return Err(format!(
@@ -199,8 +221,8 @@ impl Source {
             .map(|&(n, via)| {
                 if via == keep {
                     format!(
-                        "cell {n} writes #{keep}: it will take in what cell {cut} has of cell \
-                         {keep}"
+                        "cell {n} writes #{keep}: its geometry may change (it may take in \
+                         what cell {cut} has of cell {keep})"
                     )
                 } else {
                     format!(
@@ -512,8 +534,18 @@ fn card_geometry(card: &str, keep: i64) -> Result<Expr, String> {
 /// simplified (`what`): llevant reads them from the cell cards alone, so
 /// the checks would miss a universe, and a `#n` would be expanded without
 /// its move. A vertical-format card (`#` then the column names) has no
-/// name: its columns are read from its first line.
+/// name: its columns are read from its line that starts with `#` (comment
+/// lines above it are part of its text). A `READ` card anywhere is refused
+/// too: the cards it brings in are not read, so they could give `U` or
+/// `TRCL`, or write `#n` of the cell changed.
 fn placed_by_data_card(tree: &migjorn::Model, what: &str) -> Option<String> {
+    if let Some(r) = tree.read_files().first() {
+        return Some(format!(
+            "the input reads cards from another file (`READ FILE={}`), which is not read: \
+             {what} by hand",
+            r.path
+        ));
+    }
     let moves = |n: &str| {
         let n = n.trim_start_matches('*');
         let n = n.split(':').next().unwrap_or(n);
@@ -522,7 +554,10 @@ fn placed_by_data_card(tree: &migjorn::Model, what: &str) -> Option<String> {
     let name = tree.cell_parameter_cards().find_map(|c| match c.name() {
         Some(n) => moves(n).then(|| n.to_string()),
         None => {
-            let head = c.text().trim_start().strip_prefix('#')?.lines().next()?;
+            let head = c
+                .text()
+                .lines()
+                .find_map(|l| l.trim_start().strip_prefix('#'))?;
             let head = head.split('$').next().unwrap_or("");
             head.split_whitespace()
                 .find(|w| moves(w))
@@ -937,6 +972,22 @@ mod tests {
         // An `IMP` column alone is fine.
         let imp = format!("{deck}#  imp:p\n1  1\n2  1\n3  1\n4  0\n");
         assert!(Source::from_str(&imp).cut_plan(1, 2, false).is_ok());
+        // The same with a comment line above the `#` line (part of the
+        // card's text).
+        let vertical = format!(
+            "{deck}c placement\n#  trcl  imp:p\n1  (5 0 0)  1\n2  j  1\n3  j  1\n4  j  0\n"
+        );
+        let err = Source::from_str(&vertical)
+            .cut_plan(1, 2, false)
+            .unwrap_err();
+        assert!(err.contains("data card"), "{err}");
+        let imp = format!("{deck}c placement\n#  imp:p\n1  1\n2  1\n3  1\n4  0\n");
+        assert!(Source::from_str(&imp).cut_plan(1, 2, false).is_ok());
+        // A `READ` card in the data block could bring in `U 1 0 0 0`.
+        let err = Source::from_str(&format!("{deck}read file=placement.i\n"))
+            .cut_plan(1, 2, false)
+            .unwrap_err();
+        assert!(err.contains("READ FILE=placement.i"), "{err}");
     }
 
     /// Simplify refuses it too: cell 2, moved by a data card, would be

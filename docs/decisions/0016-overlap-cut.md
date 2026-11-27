@@ -16,8 +16,10 @@ whether the overlap was actually solved.
 
 - **The viewer cuts in steps, each its own edit** (`cutflow.rs`, `panels/inspector/cut.rs`):
   1. Proposed: `A` with `#B` added, Apply or Cancel.
-  2. Written: `Source::cut_expand` writes `#B` as what it stands for, the complement of B
-     by De Morgan only (cheap at any size), even when that is no shorter.
+  2. Written: `Source::cut_expand` plans `#B` as what it stands for, the complement of B
+     by De Morgan only (cheap at any size), even when that is no shorter, and
+     `Source::apply_expand` writes that plan; the check and the simplification work on
+     the card written.
   3. Verified: the check of what changed. `A ∩ ¬B` and `B` are disjoint by construction,
      so what can go wrong is a cell that writes `#A`. It takes in `A ∩ B` and may now overlap
      B, and the verdict reports that as a new overlap (`CutExpand::users`). Revert takes the

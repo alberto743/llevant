@@ -3,7 +3,8 @@
 //! `Deck`: an MCNP input as written, to correct (cut a cell out of another
 //! one to fix an overlap) and save. Nothing else of the input changes.
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use llevant_scene::source::{CutPlan, Edited, Source};
@@ -159,7 +160,8 @@ impl Deck {
         self.source.to_source()
     }
 
-    /// Write the input to `path` (default: the file it was read from).
+    /// Write the input to `path` (default: the file it was read from),
+    /// whole or not at all: a failed save leaves the file as it was.
     /// `ValueError` if the file read was not UTF-8 (writing it would change
     /// its other bytes: convert it first).
     #[pyo3(signature = (path = None))]
@@ -174,7 +176,7 @@ impl Deck {
             ));
         }
         let text = self.source.to_source();
-        py.detach(|| std::fs::write(&path, text))
+        py.detach(|| write_replacing(&path, text.as_bytes()))
             .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("{}: {e}", path.display())))
     }
 
@@ -184,4 +186,54 @@ impl Deck {
             None => "<Deck>".into(),
         }
     }
+}
+
+/// Write `bytes` to `path` through a new file beside it, synced, then
+/// renamed over it: whole or not at all (a failure leaves `path` as it was,
+/// and removes the new file). Through a link, the file it points to is
+/// replaced; the new file takes the permissions of the one it replaces.
+fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = target
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a file name"))?;
+    let dir = target
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let (tmp, mut file) = (0..1000)
+        .find_map(|k| {
+            let tmp = dir.join(format!(
+                ".{}.{}-{k}.tmp",
+                name.to_string_lossy(),
+                std::process::id()
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                r => Some(r.map(|f| (tmp, f))),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "no free name for the temporary file",
+            ))
+        })?;
+    let written = (|| {
+        file.write_all(bytes)?;
+        if let Ok(m) = std::fs::metadata(&target) {
+            file.set_permissions(m.permissions())?;
+        }
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }

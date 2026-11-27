@@ -489,8 +489,17 @@ mod tests {
     /// marked, so that nothing writes it; one that is, is not.
     #[test]
     fn a_file_not_utf8_is_marked() {
-        let dir = std::env::temp_dir().join(format!("llevant-utf8-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // A directory of its own, made here (not one that was already there:
+        // `create` fails then), private to this user.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("llevant-utf8-{}-{nanos}", std::process::id()));
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(&dir).unwrap();
         let latin = dir.join("latin1.i");
         std::fs::write(
             &latin,

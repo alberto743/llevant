@@ -128,8 +128,14 @@ impl CutFlow {
         }
     }
 
-    /// Simplify the geometry of the cell as it is now, in the background.
-    pub fn simplify(&mut self, ctx: &egui::Context, source: &Arc<Source>) {
+    /// Simplify the geometry of the cell as it is now, in the background:
+    /// only once the cut is written and being verified (a flow still
+    /// planning would otherwise pass for one written, and Revert take back
+    /// another edit). Whether it started.
+    pub fn simplify(&mut self, ctx: &egui::Context, source: &Arc<Source>) -> bool {
+        if !matches!(self.phase, Phase::Verifying { .. }) {
+            return false;
+        }
         let slot: Slot<Simplified> = Arc::new(Mutex::new(None));
         let cancel = Arc::new(AtomicBool::new(false));
         let (src, out, ctx, keep) = (source.clone(), slot.clone(), ctx.clone(), self.keep);
@@ -144,6 +150,7 @@ impl CutFlow {
         });
         self.key = key(source);
         self.phase = Phase::Simplifying { slot, cancel };
+        true
     }
 
     /// Stop the work under way (it ends with what it has).

@@ -175,7 +175,7 @@ Each edit is one Undo, and nothing is saved until you save the input. Refused:
 - a B that writes `#A`, directly or through other cells (the two would complement each
   other);
 - every cut of an input that gives `U` or `TRCL` on a data card (llevant reads them from
-  cell cards only);
+  cell cards only), or that has a `READ` card (the cards it brings in are not read);
 - a cut that the algebra proves would leave nothing of A. An A inside B only by where the
   surfaces are, such as two concentric spheres, is not detected, and is written.
 

@@ -599,7 +599,7 @@ class Deck:
         a `keep` that a `LIKE` cell copies, a `keep` cut by `#cut` already,
         a `cut` that writes `#keep` (directly or through other cells: the two
         would complement each other), and any input with `U` or `TRCL` on a
-        data card (not read). `Cut.warnings` names the cells that write
+        data card or with a `READ` card (not read). `Cut.warnings` names the cells that write
         `#keep`, and those that change through them (by another `#n` or a
         `LIKE` copy): they may take in what is cut. And a label of `keep`
         that no longer fits on its card.
