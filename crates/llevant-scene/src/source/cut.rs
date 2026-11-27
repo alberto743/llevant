@@ -35,7 +35,7 @@ pub struct CutPlan {
 /// What cutting cell `cut` out of cell `keep` writes first (the cheap step):
 /// the geometry of `keep` with `#cut` replaced by the complement of cell
 /// `cut`, expanded by De Morgan only. Nothing is written until
-/// [`Source::apply_card`].
+/// [`Source::apply_expand`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CutExpand {
     pub keep: i64,
@@ -160,13 +160,10 @@ impl Source {
         }
         // The cells the cut changes: those that write `#keep`, and in turn
         // those that write `#n` of one of them or copy one with `LIKE`
-        // (through two complements a cell grows again: all are listed).
-        // Each with the cell it changes through (`keep` itself for a cell
-        // that writes `#keep`).
-        // Level by level from `keep` (in deck order within a level), over
-        // an index of who stands on whom built once: linear in the deck and
-        // its references even for a long chain.
-        let mut users: Vec<(i64, i64)> = Vec::new();
+        // (through two complements a cell grows again: all are listed), each
+        // with the cell it changes through. Level by level from `keep`, in
+        // deck order within a level, over an index of who stands on whom.
+        let mut users: Users = Vec::new();
         let mut rev: HashMap<i64, Vec<usize>> = HashMap::new();
         for (i, (_, deps)) in on.iter().enumerate() {
             for &d in deps {
@@ -214,7 +211,7 @@ impl Source {
         algebra::same(want, &got, &|n| expandable(&tree, n), limits)
     }
 
-    /// The warnings for the cells that write `#keep`.
+    /// The warnings for the cells that change with `keep`.
     fn user_warnings(keep: i64, cut: i64, users: &[(i64, i64)]) -> Vec<String> {
         users
             .iter()
@@ -418,10 +415,10 @@ impl Source {
     /// (MCNP moves the surfaces of a `#n` by the cell's own `TRCL`), a `keep`
     /// that a `LIKE` cell copies (that cell would be cut too), a `keep` cut by
     /// `#cut` already, a `cut` that writes `#keep` (directly or through other
-    /// cells) and any input with `U` or `TRCL` on a data card. A `cut` with a
-    /// `TRCL`, or `#n` of a cell that cannot be expanded, is written as `#n`
-    /// and not simplified. A warning for each cell that writes `#keep`: it
-    /// then takes in what is cut.
+    /// cells) and any input with `U` or `TRCL` on a data card or with a `READ`
+    /// card. A `cut` with a `TRCL`, or `#n` of a cell that cannot be
+    /// expanded, is written as `#n` and not simplified. A warning for each
+    /// cell that changes with `keep`: it may take in what is cut.
     pub fn cut_plan(&self, keep: i64, cut: i64, simplify: bool) -> Result<CutPlan, String> {
         let revision = self.revision();
         let limits = Limits::within(PLAN_LIMIT);
@@ -574,26 +571,16 @@ fn placed_by_data_card(tree: &migjorn::Model, what: &str) -> Option<String> {
 /// that writes `#target` (`from` itself counts): the cell that would make
 /// `target` and `from` complement each other.
 fn reaches(tree: &migjorn::Model, from: i64, target: i64) -> Option<i64> {
-    let mut seen = vec![from];
+    let mut seen = HashSet::from([from]);
     let mut todo = vec![from];
     while let Some(n) = todo.pop() {
         let Some(c) = tree.cell(n) else { continue };
         // A `LIKE m BUT` cell has the geometry of m: it writes what m writes.
-        if let Some(m) = c.like() {
+        for m in c.like().into_iter().chain(complemented(tree, n)) {
             if m == target {
                 return Some(n);
             }
-            if !seen.contains(&m) {
-                seen.push(m);
-                todo.push(m);
-            }
-        }
-        for m in complemented(tree, n) {
-            if m == target {
-                return Some(n);
-            }
-            if !seen.contains(&m) {
-                seen.push(m);
+            if seen.insert(m) {
                 todo.push(m);
             }
         }

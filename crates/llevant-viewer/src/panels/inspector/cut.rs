@@ -328,10 +328,8 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
         Verdict::NotChecked => {
             ui.label(
                 egui::RichText::new(
-                    "No check of the place where the two cells meet has run since the cut \
-                     (the model may not be complete, the check was of another region, or it \
-                     started before the cut): check from the Problems panel to see whether \
-                     the overlap is solved.",
+                    "Not checked: no check since the cut has covered where the two cells \
+                     meet. Check from the Problems panel.",
                 )
                 .weak(),
             );
@@ -395,15 +393,13 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
                 if known {
                     format!(
                         "New overlap: cell{s} {list} now overlap{v} cell {cut}: {they} depend{v} \
-                         on cell {keep} (#{keep}, directly or through other cells), so took in \
-                         what was cut"
+                         on cell {keep} and took in what was cut"
                     )
                 } else {
                     format!(
                         "Overlap: cell{s} {list} overlap{v} cell {cut}: {they} depend{v} on cell \
-                         {keep} (#{keep}, directly or through other cells), so may have taken in \
-                         what was cut (no check before the cut says whether {they} overlapped \
-                         already)"
+                         {keep} and may have taken in what was cut (no check before the cut \
+                         looked there)"
                     )
                 },
             );

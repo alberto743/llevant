@@ -616,7 +616,8 @@ class Deck:
     def text(self) -> str:
         """The input as it is now."""
     def save(self, path: Union[str, PathLike[str], None] = None) -> None:
-        """Write the input to `path` (default: the file it was read from).
+        """Write the input to `path` (default: the file it was read from),
+        whole or not at all: a failed save leaves the file as it was.
         `ValueError` if the file read was not UTF-8 (writing it would change
         its other bytes: convert it first)."""
 

@@ -1458,7 +1458,7 @@ fn a_check_started_before_the_cut_does_not_judge_it() {
     };
     d.results.check = Some(Arc::new(early));
     h.run_steps(3);
-    h.get_by_label_contains("No check of the place where the two cells meet");
+    h.get_by_label_contains("Not checked: no check since the cut");
     assert!(h.query_by_label_contains("Overlap solved").is_none());
 
     // The check of the cut back: solved again.

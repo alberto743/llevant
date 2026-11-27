@@ -182,8 +182,8 @@ Each edit is one Undo, and nothing is saved until you save the input. Refused:
 A B with a `TRCL`, or another `#n` in A that cannot be written out, stays `#n`. A cut is
 written only if nothing in the input changed since it was planned, so edit first and cut
 after. Before Apply, the inspector names the cells that write `#A` (and those that change
-through them, by another `#n` or a `LIKE` copy), and says so if the
-cell's `$` label no longer fits on its card. Once `#B` is written out, cell A no longer
+through them, by another `#n` or a `LIKE` copy), and says so if the cell's `$` label no
+longer fits on its card. Once `#B` is written out, cell A no longer
 follows later edits of cell B.
 
 ![The Check workspace: two overlaps found in the slice, hatched in magenta](../img/viewer-check.png)

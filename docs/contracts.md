@@ -59,18 +59,18 @@ that meet an overlap, stopping at it or seeing through it, are not compared.
 `Source::cut_plan(keep, cut, simplify)` gives cell `keep` the geometry `A ∩ ¬B` (written
 `A #B`, or in fewer terms when `simplify`). The shorter form uses only the laws of Boolean
 algebra on the surface senses as independent variables (a macrobody facet is a variable
-of its own, and so is each `#n` kept), so it is the same region for any surfaces. Every
-expanded or simplified card is proven before it is written, read back from its text as MCNP reads it
-(`Source::proves`, `algebra::same`): the reduced ordered BDDs of `A ∩ ¬B` and of the card
+of its own, and so is each `#n` kept), so it is the same region for any surfaces. An
+expanded or simplified card is proven before it is written, read back from its text as MCNP
+reads it (`Source::proves`, `algebra::same`): the reduced ordered BDDs of `A ∩ ¬B` and of the card
 must be the same node, first with each `#n` a variable, else with every `#n` expanded by
 De Morgan. A `#n` that cannot be expanded is the same unknown region on both sides: equal
 so is equal, unequal so says nothing
 (`a_complement_that_cannot_be_expanded_does_not_stop_the_cut_one`). A card proven
-different is an error and nothing is written. When there is no completed proof (too large,
-or the limits run out first, `same` giving `None`), the plain `A #B` is written instead,
-which needs none: it is `A ∩ ¬B` as MCNP reads it (`source/algebra.rs` tests, among them 400 random cuts compared with truth
-tables; `source/cut.rs` `the_card_written_is_proven_from_its_text` tells a card that lost
-its parentheses). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
+different is an error and nothing is written. Without a completed proof (too large, or
+out of time: `same` gives `None`) the plain `A #B` is written, which needs none
+(`source/algebra.rs` tests, among them 400 random cuts compared with truth tables;
+`source/cut.rs` `the_card_written_is_proven_from_its_text` tells a card that lost its
+parentheses). `crates/llevant-scene/tests/cut.rs` compiles decks before and after: the
 overlap is gone, the points of `A ∩ B` now belong to the cell not cut, every other point
 keeps its cell, and the simplified and plain cuts label every point alike. "Every point"
 is every point off the surfaces: the proof treats each surface sense as true or false, so
@@ -132,7 +132,8 @@ plan is never written into another input
 
 The Boolean work stops at its limits (`Limits`: a time limit and a cancel flag), looked
 at when a proof or a simplification starts, every 1024 steps, while absorbing and again
-before a proof answers; stopped, it gives no form (`a_cancelled_proof_gives_no_answer`,
+before a proof answers; stopped, it gives no form, except that a stop in the second tier
+leaves the proven form of the first (`a_cancelled_proof_gives_no_answer`,
 `a_proof_cancelled_during_a_lookup_gives_no_answer`). A tier-1 product with an atom of
 both senses absorbs nothing (`a_contradiction_absorbs_nothing`). A `#b` whose copies
 would be more than a proof can take is not expanded
@@ -158,7 +159,8 @@ it in place (`Source::edit`; `edit_card` on text): every other byte stays as wri
 gives after edits are those of a parse of the text (`source.rs` tests). That holds for a
 UTF-8 file: one that is not is read with U+FFFD in place of its other bytes and marked
 `Source::not_utf8`, and neither the viewer nor `Deck.save` writes it
-(`a_file_not_utf8_is_marked`). An edit that
+(`a_file_not_utf8_is_marked`). Both save with `Source::save_to`: whole or not at all, the
+file kept as it was on a failure (`a_save_replaces_the_file_whole_or_not_at_all`). An edit that
 cannot be made (no such card, one in a `READ` file, text that does not read as a card
 of that kind, a line over 128 columns) is an error and changes nothing; `restore` and
 `redo` take an edit back and make it again exactly. The viewer compiles an edit with
