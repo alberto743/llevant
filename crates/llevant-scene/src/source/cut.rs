@@ -531,8 +531,8 @@ fn card_geometry(card: &str, keep: i64) -> Result<Expr, String> {
 /// simplified (`what`): llevant reads them from the cell cards alone, so
 /// the checks would miss a universe, and a `#n` would be expanded without
 /// its move. A vertical-format card (`#` then the column names) has no
-/// name: its columns are read from its line that starts with `#` (comment
-/// lines above it are part of its text). A `READ` card anywhere is refused
+/// name: its columns are read from its first line that is not a comment
+/// (comment lines above it are part of its text). A `READ` card anywhere is refused
 /// too: the cards it brings in are not read, so they could give `U` or
 /// `TRCL`, or write `#n` of the cell changed.
 fn placed_by_data_card(tree: &migjorn::Model, what: &str) -> Option<String> {
@@ -554,7 +554,9 @@ fn placed_by_data_card(tree: &migjorn::Model, what: &str) -> Option<String> {
             let head = c
                 .text()
                 .lines()
-                .find_map(|l| l.trim_start().strip_prefix('#'))?;
+                .find(|l| !super::lines::is_comment(l) && !super::lines::is_blank(l))?
+                .trim_start()
+                .strip_prefix('#')?;
             let head = head.split('$').next().unwrap_or("");
             head.split_whitespace()
                 .find(|w| moves(w))
@@ -1052,7 +1054,7 @@ mod tests {
         deck += "\n";
         let fits = |card: &str| {
             card.lines()
-                .all(|l| l.chars().count() <= crate::source::MAX_COLUMNS)
+                .all(|l| crate::source::lines::columns(l) <= crate::source::MAX_COLUMNS)
         };
         let s = Source::from_str(&deck);
         let e = s.cut_expand(1, 2, &Limits::default()).unwrap();

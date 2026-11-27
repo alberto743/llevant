@@ -38,12 +38,12 @@ impl Source {
                 if let Some((n, line)) = text
                     .lines()
                     .enumerate()
-                    .find(|(_, l)| l.chars().count() > MAX_COLUMNS)
+                    .find(|(_, l)| super::lines::columns(l) > MAX_COLUMNS)
                 {
                     return Err(format!(
                         "{what}: line {} has {} columns, over MCNP's {MAX_COLUMNS}",
                         n + 1,
-                        line.chars().count()
+                        super::lines::columns(line)
                     ));
                 }
                 let (slot, old) = find(&tree, *kind, *id)
@@ -201,7 +201,7 @@ impl Source {
             }
             let kind = kind_at(&tree, slot);
             let mut new = now.clone();
-            if new.lines().any(|l| l.chars().count() > MAX_COLUMNS) {
+            if new.lines().any(|l| super::lines::columns(l) > MAX_COLUMNS) {
                 new = super::fields::wrap_long_lines(&new);
                 if let Err(e) = set_text(&mut tree, kind, slot, &new) {
                     failed = Some(format!("{} (slot {slot}): {e}", kind.name()));
@@ -243,12 +243,12 @@ impl Source {
         if let Some((n, line)) = text
             .lines()
             .enumerate()
-            .find(|(_, l)| l.chars().count() > MAX_COLUMNS)
+            .find(|(_, l)| super::lines::columns(l) > MAX_COLUMNS)
         {
             return Err(format!(
                 "line {} has {} columns, over MCNP's {MAX_COLUMNS}",
                 n + 1,
-                line.chars().count()
+                super::lines::columns(line)
             ));
         }
         let mut text = text.trim_end().to_string();

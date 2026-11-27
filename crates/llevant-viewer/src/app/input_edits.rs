@@ -7,7 +7,7 @@
 //! and after: one card, or many (cells edited together, a renumbering and
 //! every card that refers to the numbers), taken back as one.
 
-use llevant_scene::source::Edited;
+use llevant_scene::source::{lines, Edited};
 
 /// One edit: what it was (`cell 5`, `material of 12 cells`), and each
 /// card it changed, where it is, before and after.
@@ -36,7 +36,7 @@ impl Change {
         let labels = |t: &str| -> (Option<String>, Vec<String>) {
             let number = t
                 .lines()
-                .find(|l| !l.trim().is_empty() && !comment_line(l))
+                .find(|l| !lines::is_blank(l) && !lines::is_comment(l))
                 .and_then(|l| l.split_whitespace().next())
                 .map(str::to_string);
             let comments = t
@@ -142,15 +142,6 @@ fn with_newline(t: &str) -> String {
     } else {
         format!("{t}\n")
     }
-}
-
-/// Whether `line` is a `c` comment line (up to four blanks, `c`, then a blank
-/// or the end).
-fn comment_line(line: &str) -> bool {
-    let t = line.trim_start();
-    line.len() - t.len() < 5
-        && (t.eq_ignore_ascii_case("c")
-            || (t.len() > 1 && t[..1].eq_ignore_ascii_case("c") && t.as_bytes()[1] == b' '))
 }
 
 #[cfg(test)]

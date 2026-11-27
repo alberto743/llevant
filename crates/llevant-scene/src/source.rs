@@ -20,6 +20,7 @@ use llevant::{Error, Result};
 mod algebra;
 mod cut;
 mod fields;
+pub mod lines;
 mod many;
 pub use algebra::{Cut, Limits};
 pub use cut::{nothing_left, CutExpand, CutPlan, Simplified};
@@ -313,12 +314,12 @@ impl Source {
         if let Some((n, line)) = text
             .lines()
             .enumerate()
-            .find(|(_, l)| l.chars().count() > MAX_COLUMNS)
+            .find(|(_, l)| lines::columns(l) > MAX_COLUMNS)
         {
             return Err(format!(
                 "{what}: line {} has {} columns, over MCNP's {MAX_COLUMNS}",
                 n + 1,
-                line.chars().count()
+                lines::columns(line)
             ));
         }
         let mut tree = match revision {

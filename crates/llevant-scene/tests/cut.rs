@@ -276,7 +276,10 @@ fn the_overlap_zoo_is_cut_or_refused() {
     // The cases that leave nothing of `keep` (it is inside `cut`): every
     // other one must give a card to write.
     let empty: &[(i64, i64)] = &[(121, 122)];
-    let fits = |card: &str| card.lines().all(|l| l.chars().count() <= 128);
+    let fits = |card: &str| {
+        card.lines()
+            .all(|l| llevant_scene::source::lines::columns(l) <= llevant_scene::source::MAX_COLUMNS)
+    };
     // Where cells meet: their boxes, in the frame their universe is placed
     // in (universe 1 fills cell 184 moved by (800, 40, 0)).
     let shift = |n: i64| -> Vec3 {

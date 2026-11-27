@@ -2,6 +2,8 @@
 //! card before and after, the words removed and added marked, and what
 //! runs once it is applied.
 
+use llevant_scene::source::lines::is_comment;
+
 use crate::theme;
 
 /// Lines of a card shown at most on each side.
@@ -203,15 +205,6 @@ pub fn marked(ui: &mut egui::Ui, text: &str, mark: std::ops::Range<usize>) {
     ui.label(job);
 }
 
-/// Whether `line` is a comment line: `c` within the first five columns,
-/// alone or followed by a blank.
-fn comment_line(line: &str) -> bool {
-    let t = line.trim_start();
-    line.len() - t.len() < 5
-        && (t.eq_ignore_ascii_case("c")
-            || (t.starts_with(['c', 'C']) && t[1..].starts_with([' ', '\t'])))
-}
-
 /// A card as lines for a diff: its comment lines whole, the first words
 /// together (number, material, density), then one line for each factor of
 /// the geometry (a group in parentheses stays whole), parameter and
@@ -220,7 +213,7 @@ pub fn display_lines(card: &str) -> Vec<String> {
     // The comment lines above the card.
     let mut lines: Vec<String> = Vec::new();
     let mut rest = card.trim_end();
-    while let Some(first) = rest.lines().next().filter(|l| comment_line(l)) {
+    while let Some(first) = rest.lines().next().filter(|l| is_comment(l)) {
         lines.push(first.trim_end().to_string());
         rest = rest[first.len()..].trim_start_matches(['\r', '\n']);
     }
@@ -233,7 +226,7 @@ pub fn display_lines(card: &str) -> Vec<String> {
     let mut held: Vec<String> = Vec::new();
     let mut text = String::new();
     for l in rest.lines() {
-        if comment_line(l) {
+        if is_comment(l) {
             if depth > 0 {
                 held.push(l.trim_end().to_string());
             } else {

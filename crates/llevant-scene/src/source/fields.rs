@@ -7,6 +7,7 @@
 
 use migjorn::EditError;
 
+use super::lines::columns;
 use super::{CardKind, Source};
 
 /// A parameter of a cell card, as written.
@@ -671,11 +672,6 @@ fn geometry_terms(text: &str) -> Option<Vec<String>> {
 /// Lines are broken this far in (columns), under [`super::MAX_COLUMNS`].
 const BREAK_AT: usize = 100;
 
-/// Columns of `s` (characters, not bytes).
-fn width(s: &str) -> usize {
-    s.chars().count()
-}
-
 /// `word` is a cell parameter, or the start of the parameters: it has an
 /// `=`, or starts with a letter or a `*`.
 fn ends_geometry(word: &str) -> bool {
@@ -722,7 +718,7 @@ fn pieces<'a>(code: &'a str, in_geometry: &mut bool) -> Vec<(&'a str, bool)> {
 /// comment lines ([`comment_lines`]).
 fn own_line_or_comments(note: &str, newline: &str) -> String {
     let line = format!("     {note}");
-    if width(&line) <= super::MAX_COLUMNS {
+    if columns(&line) <= super::MAX_COLUMNS {
         format!("{line}{newline}")
     } else {
         comment_lines(note, newline)
@@ -738,7 +734,7 @@ fn comment_lines(note: &str, newline: &str) -> String {
     let mut line = String::new();
     for word in text.split_whitespace() {
         let mut word = word.to_string();
-        while width(&word) > room {
+        while columns(&word) > room {
             let head: String = word.chars().take(room).collect();
             word = word.chars().skip(room).collect();
             if !line.is_empty() {
@@ -747,7 +743,7 @@ fn comment_lines(note: &str, newline: &str) -> String {
             }
             out += &format!("c {head}{newline}");
         }
-        if !line.is_empty() && width(&line) + 1 + width(&word) > room {
+        if !line.is_empty() && columns(&line) + 1 + columns(&word) > room {
             out += &format!("c {line}{newline}");
             line.clear();
         }
@@ -773,7 +769,7 @@ fn comment_lines(note: &str, newline: &str) -> String {
 /// are; a word longer than a line is left whole.
 pub fn wrap_long_lines(card: &str) -> String {
     let max = super::MAX_COLUMNS;
-    if card.lines().all(|l| width(l) <= max) {
+    if card.lines().all(|l| columns(l) <= max) {
         return card.to_string();
     }
     let mut out = String::new();
@@ -788,18 +784,11 @@ pub fn wrap_long_lines(card: &str) -> String {
                 None => (line, ""),
             },
         };
-        let comment = {
-            let t = body.trim_start();
-            let lead = body.len() - t.len();
-            lead < 5
-                && (t.eq_ignore_ascii_case("c")
-                    || (t.starts_with(['c', 'C']) && t[1..].starts_with([' ', '\t'])))
-        };
-        if comment {
+        if super::lines::is_comment(body) {
             out.push_str(line);
             continue;
         }
-        if width(body) <= max {
+        if columns(body) <= max {
             let code = body.split('$').next().unwrap_or("");
             in_geometry &= !code.split_whitespace().any(ends_geometry);
             out.push_str(line);
@@ -814,13 +803,13 @@ pub fn wrap_long_lines(card: &str) -> String {
         let lead = &code[..code.len() - code.trim_start().len()];
         // Pieces packed into lines of at most `BREAK_AT` columns.
         let mut lines: Vec<Vec<(&str, bool)>> = vec![Vec::new()];
-        let mut used = width(lead);
+        let mut used = columns(lead);
         for (piece, blank) in pieces(code, &mut in_geometry) {
             let cur = lines.last_mut().expect("one line");
-            let add = width(piece) + usize::from(blank && !cur.is_empty());
+            let add = columns(piece) + usize::from(blank && !cur.is_empty());
             if !cur.is_empty() && used + add > BREAK_AT {
                 lines.push(vec![(piece, blank)]);
-                used = 5 + width(piece);
+                used = 5 + columns(piece);
             } else {
                 cur.push((piece, blank));
                 used += add;
@@ -851,7 +840,7 @@ pub fn wrap_long_lines(card: &str) -> String {
         let mut after = String::new();
         if !note.is_empty() {
             let k = lines.len() - 1;
-            let fits = |s: &str| width(s) + 1 + width(note) <= max;
+            let fits = |s: &str| columns(s) + 1 + columns(note) <= max;
             if !fits(&text(k, &lines[k])) {
                 let moved = (lines[k].len() > 1).then(|| lines[k].pop()).flatten();
                 match moved {
@@ -1155,7 +1144,7 @@ m2 1001 2
 
     fn fits(card: &str) -> bool {
         card.lines()
-            .all(|l| l.chars().count() <= super::super::MAX_COLUMNS)
+            .all(|l| columns(l) <= super::super::MAX_COLUMNS)
     }
 
     #[test]
@@ -1224,7 +1213,7 @@ m2 1001 2
             let words = |t: &str| -> Vec<String> {
                 t.lines()
                     .map(|l| l.split('$').next().unwrap_or(""))
-                    .filter(|l| !l.trim_start().starts_with(['c', 'C']))
+                    .filter(|l| !super::super::lines::is_comment(l))
                     .flat_map(|l| l.split_whitespace().map(String::from))
                     .collect()
             };
