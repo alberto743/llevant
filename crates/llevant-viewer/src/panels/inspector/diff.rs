@@ -203,58 +203,92 @@ pub fn marked(ui: &mut egui::Ui, text: &str, mark: std::ops::Range<usize>) {
     ui.label(job);
 }
 
-/// A card as lines for a diff: the first words together (number, material,
-/// density), then one line for each factor of the geometry (a group in
-/// parentheses stays whole), parameter and comment. Only for showing: the
-/// card is written as it is.
+/// Whether `line` is a comment line: `c` within the first five columns,
+/// alone or followed by a blank.
+fn comment_line(line: &str) -> bool {
+    let t = line.trim_start();
+    line.len() - t.len() < 5
+        && (t.eq_ignore_ascii_case("c")
+            || (t.starts_with(['c', 'C']) && t[1..].starts_with([' ', '\t'])))
+}
+
+/// A card as lines for a diff: its comment lines whole, the first words
+/// together (number, material, density), then one line for each factor of
+/// the geometry (a group in parentheses stays whole), parameter and
+/// comment. Only for showing: the card is written as it is.
 pub fn display_lines(card: &str) -> Vec<String> {
+    // The comment lines above the card.
+    let mut lines: Vec<String> = Vec::new();
+    let mut rest = card.trim_end();
+    while let Some(first) = rest.lines().next().filter(|l| comment_line(l)) {
+        lines.push(first.trim_end().to_string());
+        rest = rest[first.len()..].trim_start_matches(['\r', '\n']);
+    }
     let mut tokens: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut depth = 0i32;
     // `$` ends what is read of a line at any depth: a comment inside a group
-    // is shown after the group, which goes on on the next line.
+    // is shown after the group, which goes on on the next line; so does a
+    // comment line.
     let mut held: Vec<String> = Vec::new();
-    let mut chars = card.trim_end().chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '$' => {
-                let mut comment = String::from("$");
-                while let Some(&n) = chars.peek() {
-                    if n == '\n' {
-                        break;
-                    }
-                    comment.push(n);
-                    chars.next();
-                }
-                if depth > 0 {
-                    held.push(comment);
-                } else {
-                    if !cur.is_empty() {
-                        tokens.push(std::mem::take(&mut cur));
-                    }
-                    tokens.push(comment);
-                }
-            }
-            c if c.is_whitespace() && depth <= 0 => {
+    let mut text = String::new();
+    for l in rest.lines() {
+        if comment_line(l) {
+            if depth > 0 {
+                held.push(l.trim_end().to_string());
+            } else {
                 if !cur.is_empty() {
                     tokens.push(std::mem::take(&mut cur));
-                    tokens.append(&mut held);
                 }
+                tokens.push(l.trim_end().to_string());
             }
-            c if c.is_whitespace() => {
-                if !cur.ends_with(' ') {
-                    cur.push(' ');
+            continue;
+        }
+        text.clear();
+        text.push_str(l);
+        text.push('\n');
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '$' => {
+                    let mut comment = String::from("$");
+                    while let Some(&n) = chars.peek() {
+                        if n == '\n' {
+                            break;
+                        }
+                        comment.push(n);
+                        chars.next();
+                    }
+                    if depth > 0 {
+                        held.push(comment);
+                    } else {
+                        if !cur.is_empty() {
+                            tokens.push(std::mem::take(&mut cur));
+                        }
+                        tokens.push(comment);
+                    }
                 }
+                c if c.is_whitespace() && depth <= 0 => {
+                    if !cur.is_empty() {
+                        tokens.push(std::mem::take(&mut cur));
+                        tokens.append(&mut held);
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if !cur.ends_with(' ') {
+                        cur.push(' ');
+                    }
+                }
+                '(' => {
+                    depth += 1;
+                    cur.push(c);
+                }
+                ')' => {
+                    depth -= 1;
+                    cur.push(c);
+                }
+                c => cur.push(c),
             }
-            '(' => {
-                depth += 1;
-                cur.push(c);
-            }
-            ')' => {
-                depth -= 1;
-                cur.push(c);
-            }
-            c => cur.push(c),
         }
     }
     if !cur.is_empty() {
@@ -267,7 +301,6 @@ pub fn display_lines(card: &str) -> Vec<String> {
         _ => 3,
     }
     .min(tokens.len());
-    let mut lines = Vec::new();
     if head > 0 {
         lines.push(tokens[..head].join(" "));
     }
@@ -510,6 +543,28 @@ mod tests {
         assert_eq!(
             lines,
             ["2 0", "(-2 : -4)", "$ note )", "3", "imp:n=1"],
+            "{lines:?}"
+        );
+    }
+
+    /// Comment lines stay whole: those above the card first, those inside
+    /// it in place (after the group they interrupt).
+    #[test]
+    fn comment_lines_are_shown_whole() {
+        let lines = display_lines(
+            "c the header\n2 0 (-2\nc inside\n     :-4) 3\nc after 3\n     imp:n=1\n",
+        );
+        assert_eq!(
+            lines,
+            [
+                "c the header",
+                "2 0",
+                "(-2 :-4)",
+                "c inside",
+                "3",
+                "c after 3",
+                "imp:n=1"
+            ],
             "{lines:?}"
         );
     }

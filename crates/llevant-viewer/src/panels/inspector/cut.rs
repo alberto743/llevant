@@ -167,12 +167,12 @@ enum Verdict {
     /// No check counts: none ran, or the last one started before the cut
     /// or did not cover where the two cells met.
     NotChecked,
-    /// No overlap of the two cells, and none of B with a cell that writes
-    /// `#A`, was found; other cells overlapping A are named.
+    /// No overlap of the two cells, and none of B with a cell that changes with
+    /// A, was found; other cells overlapping A are named.
     Solved(Vec<i64>),
     /// The two still overlap (and other cells overlapping A).
     Remains(Vec<i64>),
-    /// Cells that write `#A` took in what was cut, and now overlap B (and
+    /// Cells that change with A took in what was cut, and now overlap B (and
     /// other cells overlapping A).
     New {
         cells: Vec<i64>,
@@ -253,14 +253,14 @@ fn attribute(
 struct Judgement {
     /// `a` and `b` still overlap.
     remains: bool,
-    /// The cells among `users` (those that write `#a`) overlapping `b`.
+    /// The cells among `users` (those that change with `a`) overlapping `b`.
     new: Vec<i64>,
     /// The other cells overlapping `a`.
     others: Vec<i64>,
 }
 
 /// The overlaps (`overlaps`, each the cells involved) judged for the cut of
-/// `b` out of `a`, where `users` write `#a`; cells named by `id`.
+/// `b` out of `a`, where `users` change with `a`; cells named by `id`.
 fn judge(overlaps: &[&[u32]], a: u32, b: u32, users: &[u32], id: impl Fn(u32) -> i64) -> Judgement {
     let mut j = Judgement {
         remains: false,
@@ -319,11 +319,10 @@ fn verifying(
 /// The verdict, and what can be done about it.
 fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mut Vec<Command>) {
     let green = diff::ADDED;
-    let revert = revert_button;
     match verdict {
         Verdict::Running => {
             spinner(ui, "Checking the overlap where the cell changed…");
-            ui.horizontal(|ui| revert(ui, out));
+            ui.horizontal(|ui| revert_button(ui, out));
         }
         Verdict::NotChecked => {
             ui.label(
@@ -335,7 +334,7 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
             );
             ui.horizontal(|ui| {
                 simplify_button(ui, out);
-                revert(ui, out);
+                revert_button(ui, out);
                 close_button(ui, "Keep it", out);
             });
         }
@@ -355,7 +354,7 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
             }
             ui.horizontal(|ui| {
                 simplify_button(ui, out);
-                revert(ui, out);
+                revert_button(ui, out);
                 close_button(ui, "Keep it", out);
             });
         }
@@ -373,7 +372,7 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
                 );
             }
             ui.horizontal(|ui| {
-                revert(ui, out);
+                revert_button(ui, out);
                 close_button(ui, "Keep it", out);
             });
         }
@@ -413,7 +412,7 @@ fn conclusion(ui: &mut egui::Ui, verdict: Verdict, keep: i64, cut: i64, out: &mu
                 );
             }
             ui.horizontal(|ui| {
-                revert(ui, out);
+                revert_button(ui, out);
                 close_button(ui, "Keep it", out);
             });
         }

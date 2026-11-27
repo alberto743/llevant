@@ -11,7 +11,7 @@
 //!    the background; Apply or Cancel.
 //! 2. Written ([`Phase::Applying`]): `#B` written as what it stands for.
 //! 3. Verified ([`Phase::Verifying`]): the check of what changed says
-//!    whether the overlap is solved, or remains, or a cell that writes `#A`
+//!    whether the overlap is solved, or remains, or a cell that depends on A
 //!    now overlaps B; Revert takes the cut back.
 //! 4. Simplified ([`Phase::Simplifying`]), on request, in the background
 //!    (it stops at its limits): the shorter geometry, proven equal, shown as
